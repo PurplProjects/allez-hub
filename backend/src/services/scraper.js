@@ -295,7 +295,7 @@ function capitalise(s) {
 }
 
 async function fetchPage(url) {
-  const res = await axios.get(url, { headers: HEADERS, timeout: 10000 });
+  const res = await axios.get(url, { headers: HEADERS, timeout: 30000 });
   return res.data;
 }
 
