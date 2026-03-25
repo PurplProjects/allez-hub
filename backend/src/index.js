@@ -11,29 +11,33 @@ const coachRoutes  = require('./routes/coach');
 const scrapeRoutes = require('./routes/scrape');
 
 const app  = express();
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 8080;
+
+// ── Trust Railway's proxy ────────────────────────────────────
+// Required so express-rate-limit can correctly identify client IPs
+// when running behind Railway's load balancer
+app.set('trust proxy', 1);
 
 // ── Security middleware ──────────────────────────────────────
 app.use(helmet());
 app.use(cors({
   origin: [
     process.env.FRONTEND_URL,
-    'http://localhost:5173',          // Vite dev server
+    'http://localhost:5173',
     'https://dashboard.allezfencing.com',
+    'https://allez-hub.vercel.app',
   ],
   credentials: true,
 }));
 app.use(express.json());
 
 // ── Rate limiting ────────────────────────────────────────────
-// Strict limit on auth endpoints to prevent OTP brute-force
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,          // 15 minutes
+  windowMs: 15 * 60 * 1000,
   max: 10,
   message: { error: 'Too many requests — please try again in 15 minutes' },
 });
 
-// General API rate limit
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 200,
