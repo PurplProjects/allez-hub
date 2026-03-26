@@ -4,6 +4,9 @@
 [build]
 builder = "NIXPACKS"
 
+[build.env]
+NIXPACKS_PKGS = "chromium"
+
 [deploy]
 startCommand = "npm start"
 healthcheckPath = "/health"
