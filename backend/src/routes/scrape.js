@@ -6,59 +6,112 @@ const { scrapeFencer, saveScrapedData } = require('../services/scraper');
 
 router.use(auth);
 
+// In-memory scrape status (resets on server restart — that's fine)
+const scrapeStatus = {};
+
 // ── POST /api/scrape/:fencerId ────────────────────────────────
-// Triggers a fresh scrape from UKRatings for a fencer
-// Coach can scrape any fencer; fencers can only scrape themselves
+// Fires off a background scrape — returns immediately
+// Poll GET /api/scrape/:fencerId/status for progress
 router.post('/:fencerId', async (req, res) => {
   const { fencerId } = req.params;
 
-  // Permission check
   if (req.user.role !== 'coach' && req.user.fencerId !== fencerId) {
     return res.status(403).json({ error: 'Not authorised' });
   }
 
   const { data: fencer } = await supabase
-    .from('fencers')
-    .select('*')
-    .eq('id', fencerId)
-    .single();
+    .from('fencers').select('*').eq('id', fencerId).single();
 
   if (!fencer) return res.status(404).json({ error: 'Fencer not found' });
-  if (!fencer.ukr_id) return res.status(400).json({ error: 'No UKRatings ID for this fencer' });
 
-  // Check last scrape — don't allow more than once per hour
+  // Don't allow concurrent scrapes for the same fencer
+  if (scrapeStatus[fencerId]?.running) {
+    return res.json({ success: true, message: 'Sync already in progress', status: scrapeStatus[fencerId] });
+  }
+
+  // Throttle — max once per 30 minutes
   const { data: lastScrape } = await supabase
     .from('scrape_log')
     .select('scraped_at')
     .eq('fencer_id', fencerId)
-    .eq('status', 'success')
     .order('scraped_at', { ascending: false })
     .limit(1)
     .single();
 
   if (lastScrape) {
-    const hourAgo = new Date(Date.now() - 60 * 60 * 1000);
-    if (new Date(lastScrape.scraped_at) > hourAgo) {
+    const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000);
+    if (new Date(lastScrape.scraped_at) > thirtyMinAgo) {
       return res.status(429).json({
-        error: 'Data was synced recently. Please wait before syncing again.',
+        error: 'Synced recently — please wait 30 minutes between syncs',
         lastSync: lastScrape.scraped_at,
       });
     }
   }
 
-  // Run scrape asynchronously — return immediately, scrape in background
-  res.json({ success: true, message: 'Sync started — data will update in 1-2 minutes.' });
+  // Determine sync mode for the user message
+  const syncMode = lastScrape ? 'incremental' : 'full';
+  const modeMsg  = syncMode === 'incremental'
+    ? `Incremental sync — checking only tournaments since last sync`
+    : `Full sync — scanning all FTL tournaments (takes 2-4 minutes)`;
+
+  // Mark as running
+  scrapeStatus[fencerId] = {
+    running:  true,
+    started:  new Date().toISOString(),
+    syncMode,
+    message:  modeMsg,
+    found:    0,
+    boutsAdded: 0,
+  };
+
+  // Return immediately — scrape runs in background
+  res.json({
+    success:  true,
+    syncMode,
+    message:  `${modeMsg}. Poll /status for progress.`,
+    fencer:   fencer.name,
+  });
 
   // Background scrape
-  scrapeFencer(fencer)
-    .then(results => saveScrapedData(fencerId, results))
-    .then(added => console.log(`Scraped ${fencer.name}: ${added} bouts added`))
-    .catch(err => console.error(`Scrape failed for ${fencer.name}:`, err));
+  (async () => {
+    try {
+      scrapeStatus[fencerId].message = 'Fetching tournament list from FTL...';
+      const scrapedData = await scrapeFencer(fencer);
+
+      scrapeStatus[fencerId].message = `Found ${scrapedData.competitions.length} events — saving to database...`;
+      scrapeStatus[fencerId].found   = scrapedData.competitions.length;
+
+      const boutsAdded = await saveScrapedData(fencerId, scrapedData);
+
+      scrapeStatus[fencerId] = {
+        running:              false,
+        completed:            new Date().toISOString(),
+        syncMode:             scrapedData.syncMode,
+        message:              `Done — ${boutsAdded} bouts saved across ${scrapedData.competitions.length} events`,
+        found:                scrapedData.competitions.length,
+        boutsAdded,
+        tournamentsChecked:   scrapedData.tournamentsChecked,
+        eventsChecked:        scrapedData.eventsChecked,
+        errors:               scrapedData.errors.slice(0, 3),
+      };
+    } catch (err) {
+      console.error('Scrape failed:', err);
+      scrapeStatus[fencerId] = {
+        running:   false,
+        completed: new Date().toISOString(),
+        message:   `Error: ${err.message}`,
+        error:     true,
+      };
+    }
+  })();
 });
 
 // ── GET /api/scrape/:fencerId/status ──────────────────────────
 router.get('/:fencerId/status', async (req, res) => {
-  const { data } = await supabase
+  const inMemory = scrapeStatus[req.params.fencerId];
+
+  // Also check DB for last completed scrape
+  const { data: dbLog } = await supabase
     .from('scrape_log')
     .select('scraped_at, status, bouts_added')
     .eq('fencer_id', req.params.fencerId)
@@ -66,7 +119,11 @@ router.get('/:fencerId/status', async (req, res) => {
     .limit(1)
     .single();
 
-  res.json(data || { status: 'never_synced' });
+  res.json({
+    inProgress: inMemory?.running || false,
+    current:    inMemory || null,
+    lastSync:   dbLog || null,
+  });
 });
 
 module.exports = router;
