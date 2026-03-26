@@ -5,10 +5,12 @@ import { theme } from '../../lib/theme';
 import TopBar from '../Shared/TopBar';
 import SectionTabs from '../Shared/SectionTabs';
 import OverviewTab    from './tabs/OverviewTab';
-import { PoolDETab, RivalsTab } from './tabs/PoolDETab';
+import PoolDETab      from './tabs/PoolDETab';
+import RivalsTab      from './tabs/RivalsTab';
 import BoutHistoryTab from './tabs/BoutHistoryTab';
 import MentalTab      from './tabs/MentalTab';
 import RoutineTab     from './tabs/RoutineTab';
+import AddTournamentTab from '../Shared/AddTournamentTab';
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
@@ -17,6 +19,7 @@ const TABS = [
   { id: 'bouts',    label: 'Bout history' },
   { id: 'mental',   label: 'Mental checklist' },
   { id: 'routine',  label: 'Match-day routine' },
+  { id: 'tournament', label: '+ Add tournament' },
 ];
 
 export default function FencerDashboard() {
@@ -109,6 +112,9 @@ export default function FencerDashboard() {
         )}
         {activeTab === 'routine' && (
           <RoutineTab cuephrase={fencer?.cue_phrase} />
+        )}
+        {activeTab === 'tournament' && (
+          <AddTournamentTab />
         )}
       </div>
     </div>
