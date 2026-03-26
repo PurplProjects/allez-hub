@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { getSquad, getFencerDetail, addCoachNote, triggerScrape } from '../../lib/api';
 import { theme } from '../../lib/theme';
 import TopBar from '../Shared/TopBar';
+import AddTournamentTab from '../Shared/AddTournamentTab';
 import SectionTabs from '../Shared/SectionTabs';
 
 const T = theme;
@@ -9,7 +10,8 @@ const TABS = [
   { id:'squad',    label:'Squad overview' },
   { id:'compare',  label:'Comparison' },
   { id:'focus',    label:'Focus areas' },
-  { id:'upcoming', label:'Upcoming events' },
+  { id:'upcoming',   label:'Upcoming events' },
+  { id:'tournament',  label:'+ Add tournament' },
 ];
 
 export default function CoachDashboard() {
@@ -336,6 +338,11 @@ export default function CoachDashboard() {
               );
             })}
           </>
+        )}
+
+        {/* ── ADD TOURNAMENT ── */}
+        {activeTab === 'tournament' && (
+          <AddTournamentTab />
         )}
 
         {/* ── UPCOMING ── */}
