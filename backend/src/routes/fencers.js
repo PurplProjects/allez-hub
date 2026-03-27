@@ -52,7 +52,13 @@ router.get('/me/bouts', async (req, res) => {
     .range((page - 1) * limit, page * limit - 1);
 
   if (year)        query = query.gte('date', `${year}-01-01`).lte('date', `${year}-12-31`);
-  if (type)        query = query.eq('bout_type', type);
+  if (type) {
+    if (type === 'DE') {
+      query = query.like('bout_type', 'DE%');
+    } else {
+      query = query.eq('bout_type', type);
+    }
+  }
   if (result)      query = query.eq('result', result);
   if (opponent)    query = query.ilike('opponent', `%${opponent}%`);
   if (competition) query = query.eq('competition_id', competition);
@@ -99,7 +105,7 @@ function computeStats(bouts, comps) {
   const won   = bouts.filter(b => b.result === 'Won').length;
   const total = bouts.length;
   const poule = bouts.filter(b => b.bout_type === 'Poule');
-  const de    = bouts.filter(b => b.bout_type === 'DE');
+  const de    = bouts.filter(b => b.bout_type?.startsWith('DE'));
 
   // By year
   const byYear = {};
@@ -112,7 +118,7 @@ function computeStats(bouts, comps) {
     byYear[y].tr += b.score_against;
     if (b.result === 'Won') byYear[y].won++;
     if (b.bout_type === 'Poule') { byYear[y].pouleT++; if (b.result === 'Won') byYear[y].pouleW++; }
-    if (b.bout_type === 'DE')    { byYear[y].deT++;    if (b.result === 'Won') byYear[y].deW++; }
+    if (b.bout_type?.startsWith('DE'))    { byYear[y].deT++;    if (b.result === 'Won') byYear[y].deW++; }
   });
 
   // Rival analysis (opponents faced 3+ times)
