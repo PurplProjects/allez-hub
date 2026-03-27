@@ -24,7 +24,7 @@ export default function BoutHistoryTab({ bouts = [], competitions = [] }) {
       if (search && !b.opponent?.toLowerCase().includes(search.toLowerCase())) return false;
       if (year   !== 'all' && !b.date?.startsWith(year))          return false;
       if (compId !== 'all' && b.competition_id !== compId)         return false;
-      if (type   !== 'all' && b.bout_type !== type)                return false;
+      if (type   !== 'all' && !(type === 'DE' ? b.bout_type?.startsWith('DE') : b.bout_type === type)) return false;
       if (result !== 'all' && b.result !== result)                 return false;
       return true;
     });
