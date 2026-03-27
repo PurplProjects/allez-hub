@@ -215,19 +215,59 @@ async function searchFTLEventForFencer(eventGUID, surname, firstName) {
     const data = await fetchJSON(`${FTL}/events/results/data/${eventGUID}`);
     if (!Array.isArray(data)) return null;
 
-    // Search by surname only (more robust) — firstName may vary
     const surnameL = surname.toLowerCase();
     const firstL   = firstName.toLowerCase();
     
-    const match = data.find(f => {
+    // All candidates matching surname
+    const candidates = data.filter(f => {
       const s = (f.search || '').toLowerCase();
-      // Must match surname; try to also match first name if provided
-      if (!s.includes(surnameL)) return false;
-      if (!firstL) return true;
-      // Check any word in firstName matches any word in search
-      const firstWords = firstL.split(' ').filter(w => w.length > 1);
-      return firstWords.some(w => s.includes(w));
+      return s.includes(surnameL);
     });
+
+    if (!candidates.length) return null;
+
+    let match = null;
+
+    if (candidates.length === 1) {
+      // Only one person with this surname — use it
+      match = candidates[0];
+    } else if (firstL) {
+      // Multiple people with same surname — try to narrow by first name words
+      const firstWords = firstL.split(' ').filter(w => w.length > 1);
+      
+      // Score each candidate by how many first-name words match
+      const scored = candidates.map(f => {
+        const s = (f.search || '').toLowerCase();
+        const score = firstWords.filter(w => s.includes(w)).length;
+        return { f, score };
+      }).sort((a, b) => b.score - a.score);
+
+      // Only accept if best match scores at least one word, and is unambiguous
+      if (scored[0].score > 0) {
+        // Check for ties at top score
+        const topScore = scored[0].score;
+        const topMatches = scored.filter(s => s.score === topScore);
+        if (topMatches.length === 1) {
+          match = topMatches[0].f; // clear winner
+        } else {
+          // Tie — try exact full name match as tiebreaker
+          const exact = topMatches.find(s => {
+            const searchStr = (s.f.search || '').toLowerCase();
+            return firstWords.every(w => searchStr.includes(w));
+          });
+          match = exact ? exact.f : topMatches[0].f;
+        }
+      } else {
+        // No first name match — if surnames are different clubs/contexts, 
+        // warn and skip rather than guess wrong
+        console.warn(`    Ambiguous: ${candidates.length} fencers named ${surname} in event ${eventGUID}, none match firstName "${firstName}" — skipping`);
+        return null;
+      }
+    } else {
+      // No firstName provided and multiple matches — can't disambiguate
+      console.warn(`    Ambiguous: ${candidates.length} fencers named ${surname} in event ${eventGUID} — skipping`);
+      return null;
+    }
 
     if (!match) return null;
 
@@ -415,6 +455,18 @@ async function scrapeTableau(eventGUID, tableauGUID, surname) {
       'Quarter-Final','Semi-Final','Final'
     ];
 
+    // Helper: extract clean "First Surname" from raw FTL name string
+    // FTL format: "(N) SURNAME FirstnameClubName" — club concatenated with no space
+    function extractName(raw) {
+      const s = raw.replace(/^\(\d+\)\s*/, '').trim();
+      // Match: ALL_CAPS surname(s), then Firstname (Capital + lowercase), stop before club
+      const m = s.match(/^((?:[A-Z][A-Z\s\-'\/]+\s+)*[A-Z]+(?:\s+[A-Z]+)*)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/);
+      if (!m) return null;
+      const sur = m[1].trim();
+      const first = m[2].trim();
+      return `${first} ${sur[0]}${sur.slice(1).toLowerCase()}`;
+    }
+
     for (const tree of trees) {
       for (let tableNum = 0; tableNum < (tree.numTables || 0); tableNum++) {
         const tableUrl = `${FTL}/tableaus/scores/${eventGUID}/${tableauGUID}/trees/${tree.guid}/tables/${tableNum}/4`;
@@ -426,75 +478,54 @@ async function scrapeTableau(eventGUID, tableauGUID, surname) {
         const $ = cheerio.load(html);
         const roundName = roundNames[tableNum] || `Round ${tableNum + 1}`;
 
-        // Walk all TRs, find ones containing our fencer
-        $('tr').each((_, row) => {
-          const rowText = $(row).text().trim();
-          if (!rowText.toUpperCase().includes(surnameUpper)) return;
-          if (rowText.toUpperCase().includes('BYE')) return;
+        const rows = $('tr').toArray().map(r => ({
+          text: $(r).text().trim(),
+        }));
 
-          // Check adjacent rows for score + opponent
-          const $row = $(row);
-          [$row.prev(), $row.next()].forEach($nearby => {
-            const nearbyText = $nearby.text().trim();
-            if (!nearbyText) return;
+        rows.forEach((row, i) => {
+          const { text } = row;
+          const scoreMatch = text.match(/(\d+)\s*-\s*(\d+)/);
+          if (!scoreMatch) return;
+          if (text.includes('BYE')) return;
 
-            const scoreMatch = nearbyText.match(/(\d+)\s*-\s*(\d+)/);
-            if (!scoreMatch) return;
-            if (nearbyText.toUpperCase().includes('BYE')) return;
+          const s1 = parseInt(scoreMatch[1]);
+          const s2 = parseInt(scoreMatch[2]);
+          const hasOurFencer = text.toUpperCase().includes(surnameUpper);
 
-            // Parse opponent name: remove seed "(N) " prefix, club, strip info, scores
-            let oppRaw = nearbyText
-              .replace(/^\(\d+\)\s*/, '')          // remove seed
-              .replace(/\d+\s*-\s*\d+.*/s, '')      // remove score onwards
-              .replace(/Strip\s*\d+/i, '')            // remove strip
-              .trim().split('\n')[0].trim();
+          // Extract winner name from this result row
+          const nameRaw = text.replace(/^\(\d+\)\s*/, '').replace(/\s*\d+\s*-\s*\d+[\s\S]*$/, '').trim();
+          const winnerName = extractName(nameRaw);
 
-            // Remove club name (after the person's name, often uppercase)
-            // Name format: "SURNAME FirstOPPCLUB" — split on uppercase run
-            const nameMatch = oppRaw.match(/^([A-Z\s\-]+[a-z][A-Za-z\s\-]*)/);
-            const oppName = nameMatch ? nameMatch[1].trim() : oppRaw;
-
-            if (!oppName || oppName.length < 3) return;
-
-            const s1 = parseInt(scoreMatch[1]);
-            const s2 = parseInt(scoreMatch[2]);
-
-            // If nearby row contains our fencer = nearby is our win (we scored higher)
-            // If nearby row is opponent's result row, determine win/loss from scores
-            const nearbyHasUs = nearbyText.toUpperCase().includes(surnameUpper);
-            let scoreFor, scoreAgainst, result;
-
-            if (nearbyHasUs) {
-              // The nearby row is our result — score shown is our win score
-              scoreFor = Math.max(s1, s2);
-              scoreAgainst = Math.min(s1, s2);
-              result = 'Won';
-            } else {
-              // Nearby row is opponent's — they beat us or we beat them
-              // The higher score belongs to winner; check which row has our name
-              // If our name row comes AFTER opponent, we lost (opponent scored first in bracket)
-              scoreFor = s1;
-              scoreAgainst = s2;
-              result = s1 > s2 ? 'Won' : 'Lost';
+          if (hasOurFencer) {
+            // Our fencer is in this result row — they won
+            // Find opponent in nearby rows (no score, different fencer)
+            for (const offset of [-2, -1, 1, 2]) {
+              const oRow = rows[i + offset];
+              if (!oRow) continue;
+              const ot = oRow.text;
+              if (!ot || ot.includes('BYE') || /\d+\s*-\s*\d+/.test(ot)) continue;
+              if (ot.toUpperCase().includes(surnameUpper)) continue; // skip self
+              const oppName = extractName(ot.replace(/^\(\d+\)\s*/, '').trim());
+              if (!oppName || oppName.length < 3) continue;
+              bouts.push({ opponent: oppName, scoreFor: s1, scoreAgainst: s2, result: 'Won', type: `DE ${roundName}` });
+              break;
             }
-
-            // Format name: "SURNAME First" → "First Surname"  
-            const parts = oppName.split(' ');
-            const fmtName = parts.length > 1
-              ? parts.slice(1).join(' ') + ' ' + parts[0][0] + parts[0].slice(1).toLowerCase()
-              : oppName;
-
-            bouts.push({
-              opponent:     fmtName,
-              scoreFor,
-              scoreAgainst,
-              result,
-              type:         `DE ${roundName}`,
-            });
-          });
+          } else {
+            // Someone else won — check if our fencer is in nearby rows as the loser
+            for (const offset of [-2, -1, 1, 2]) {
+              const oRow = rows[i + offset];
+              if (!oRow) continue;
+              const ot = oRow.text;
+              if (!ot.toUpperCase().includes(surnameUpper)) continue;
+              if (/\d+\s*-\s*\d+/.test(ot)) continue; // skip if also has score
+              if (!winnerName || winnerName.length < 3) continue;
+              bouts.push({ opponent: winnerName, scoreFor: s2, scoreAgainst: s1, result: 'Lost', type: `DE ${roundName}` });
+              break;
+            }
+          }
         });
 
-        break; // Found our fencer in this tableNum, move to next tree
+        break; // Found our fencer in this tableNum — move to next tree
       }
     }
 
@@ -674,7 +705,11 @@ Scraping ${name} via UKRatings → FTL (full)`);
 
         if (!matchedEvent) {
           console.log(`    Fencer not found in any of ${eventGUIDs.length} FTL events`);
-          return { ...comp, poolBouts: [], deBouts: [], ftlTournamentGUID: ftlInfo.ftlTournamentGUID };
+          // Still save the comp if it has rank/fieldSize from UKRatings
+          if (comp.rank || comp.fieldSize) {
+            return { ...comp, poolBouts: [], deBouts: [], ftlTournamentGUID: ftlInfo.ftlTournamentGUID };
+          }
+          return null; // Skip entirely if no useful data
         }
 
         const { eventGUID, poolGUIDs = [], tableauGUIDs = [], place, fieldSize, eventName } = matchedEvent;
@@ -707,7 +742,7 @@ Scraping ${name} via UKRatings → FTL (full)`);
       }
     }));
 
-    results.competitions.push(...batchResults);
+    results.competitions.push(...batchResults.filter(Boolean));
   }
 
   return results;
