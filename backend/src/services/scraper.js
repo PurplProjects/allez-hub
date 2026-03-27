@@ -252,21 +252,46 @@ function findChromium() {
   return null;
 }
 
-async function scrapePool(eventGUID, poolGUID, surname) {
+// Shared browser instance — launch once, reuse across all scrapes
+// This avoids spawning multiple Chromium processes and hitting memory limits
+let _sharedBrowser = null;
+let _sharedBrowserPath = null;
+
+async function getSharedBrowser() {
   const chromiumPath = findChromium();
-  if (!chromiumPath) {
+  if (!chromiumPath) return null;
+
+  // Reuse existing browser if still connected
+  if (_sharedBrowser && _sharedBrowserPath === chromiumPath) {
+    try {
+      // Check if still alive
+      await _sharedBrowser.contexts();
+      return _sharedBrowser;
+    } catch {
+      _sharedBrowser = null;
+    }
+  }
+
+  const { chromium } = require('playwright-core');
+  _sharedBrowser = await chromium.launch({
+    executablePath: chromiumPath,
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
+    headless: true,
+  });
+  _sharedBrowserPath = chromiumPath;
+  console.log(`[Scraper] Browser launched: ${chromiumPath}`);
+  return _sharedBrowser;
+}
+
+async function scrapePool(eventGUID, poolGUID, surname) {
+  const browser = await getSharedBrowser();
+  if (!browser) {
     console.warn('    Chromium not found — skipping pool scrape');
     return [];
   }
-  let browser;
+  let context;
   try {
-    const { chromium } = require('playwright-core');
-    browser = await chromium.launch({
-      executablePath: chromiumPath,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu'],
-      headless: true,
-    });
-    const context = await browser.newContext({ userAgent: HEADERS_HTML['User-Agent'] });
+    context = await browser.newContext({ userAgent: HEADERS_HTML['User-Agent'] });
     const page = await context.newPage();
     await page.goto(`${FTL}/pools/scores/${eventGUID}/${poolGUID}`, {
       waitUntil: 'networkidle0', timeout: 30000,
@@ -337,20 +362,14 @@ async function scrapePool(eventGUID, poolGUID, surname) {
 
 // Step 5b: Scrape DE tableau (Puppeteer)
 async function scrapeTableau(eventGUID, tableauGUID, surname) {
-  const chromiumPath = findChromium();
-  if (!chromiumPath) {
+  const browser = await getSharedBrowser();
+  if (!browser) {
     console.warn('    Chromium not found — skipping tableau scrape');
     return [];
   }
-  let browser;
+  let context;
   try {
-    const { chromium } = require('playwright-core');
-    browser = await chromium.launch({
-      executablePath: chromiumPath,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu'],
-      headless: true,
-    });
-    const context = await browser.newContext({ userAgent: HEADERS_HTML['User-Agent'] });
+    context = await browser.newContext({ userAgent: HEADERS_HTML['User-Agent'] });
     const page = await context.newPage();
     await page.goto(`${FTL}/tableaus/scores/${eventGUID}/${tableauGUID}`, {
       waitUntil: 'networkidle0', timeout: 30000,
