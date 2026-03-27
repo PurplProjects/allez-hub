@@ -305,27 +305,30 @@ async function scrapePool(eventGUID, poolGUID, surname) {
 
     return await page.evaluate((surnameUpper) => {
       const results = [];
+
       document.querySelectorAll('table').forEach(table => {
         const rows = [...table.querySelectorAll('tr')];
-        if (rows.length < 3) return;
+        if (!rows.some(r => r.innerText.toUpperCase().includes(surnameUpper))) return;
 
-        const names = [];
-        rows.forEach((row, ri) => {
-          if (ri === 0) return;
-          const cells = [...row.querySelectorAll('td')];
-          if (cells.length < 3) return;
-          const name = cells[0].innerText.trim().split('\n')[0].trim().toUpperCase();
-          if (name) names.push({ name, rowIdx: ri });
-        });
+        // Get data rows — must have at least 8 cells (name, pos, scores..., stats)
+        const dataRows = rows.filter(r => r.querySelectorAll('td').length >= 8);
+        if (dataRows.length < 2) return;
 
-        const ourIdx = names.findIndex(n => n.name.includes(surnameUpper));
+        // Build fencer list
+        const fencers = dataRows.map(row => ({
+          name:  [...row.querySelectorAll('td')][0].innerText.trim().split('\n')[0].trim(),
+          cells: [...row.querySelectorAll('td')],
+        }));
+
+        const ourIdx = fencers.findIndex(f => f.name.toUpperCase().includes(surnameUpper));
         if (ourIdx === -1) return;
 
-        const ourRow   = rows[names[ourIdx].rowIdx];
-        const ourCells = [...ourRow.querySelectorAll('td')];
+        const ourCells = fencers[ourIdx].cells;
 
-        names.forEach((opp, oppIdx) => {
+        fencers.forEach((opp, oppIdx) => {
           if (oppIdx === ourIdx) return;
+
+          // Score columns start at index 2, one per opponent position
           const scoreCell = ourCells[2 + oppIdx];
           if (!scoreCell) return;
           const txt = scoreCell.innerText.trim();
@@ -334,11 +337,10 @@ async function scrapePool(eventGUID, poolGUID, surname) {
           const isWin    = txt.startsWith('V');
           const ourScore = parseInt(txt.replace(/[VD]/g, '')) || 0;
 
-          const oppRow   = rows[names[oppIdx].rowIdx];
-          const oppCells = [...(oppRow?.querySelectorAll('td') || [])];
-          const oppTxt   = oppCells[2 + ourIdx]?.innerText?.trim() || '';
+          const oppTxt   = opp.cells[2 + ourIdx]?.innerText?.trim() || '';
           const oppScore = parseInt(oppTxt.replace(/[VD]/g, '')) || 0;
 
+          // Format name: "SURNAME First" → "First Surname"
           const parts   = opp.name.split(' ');
           const fmtName = parts.length > 1
             ? parts.slice(1).map(w => w[0] + w.slice(1).toLowerCase()).join(' ')
@@ -354,6 +356,7 @@ async function scrapePool(eventGUID, poolGUID, surname) {
           });
         });
       });
+
       return results;
     }, surname.toUpperCase());
 
