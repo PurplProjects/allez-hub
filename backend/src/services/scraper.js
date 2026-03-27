@@ -299,7 +299,8 @@ async function searchFTLEventForFencer(eventGUID, surname, firstName) {
       poolGUIDs,
       tableauGUIDs,
     };
-  } catch {
+  } catch (err) {
+    console.warn(`    searchFTLEventForFencer error: ${err.message}`);
     return null;
   }
 }
@@ -713,6 +714,7 @@ Scraping ${name} via UKRatings → FTL (full)`);
         }
 
         const { eventGUID, poolGUIDs = [], tableauGUIDs = [], place, fieldSize, eventName } = matchedEvent;
+        console.log(`    Matched: ${poolGUIDs.length} pools, ${tableauGUIDs.length} tableaux`);
 
         // Step 5: Scrape pool + tableau bouts IN PARALLEL
         const [poolBoutsArrays, deBoutsArrays] = await Promise.all([
