@@ -268,15 +268,11 @@ async function getSharedBrowser() {
     executablePath: chromiumPath,
     args: [
       '--no-sandbox',
-      '--disable-setuid-sandbox', 
+      '--disable-setuid-sandbox',
       '--disable-gpu',
       '--disable-dev-shm-usage',
       '--disable-extensions',
-      '--disable-background-networking',
-      '--disable-default-apps',
-      '--mute-audio',
       '--no-first-run',
-      '--single-process',   // key for constrained environments
     ],
     headless: true,
     timeout: 30000,
@@ -299,9 +295,18 @@ async function scrapePool(eventGUID, poolGUID, surname) {
   try {
     const page = await browser.newPage();
     await page.goto(`${FTL}/pools/scores/${eventGUID}/${poolGUID}`, {
-      waitUntil: 'networkidle0', timeout: 30000,
+      waitUntil: 'domcontentloaded', timeout: 30000,
     });
-    await new Promise(r => setTimeout(r, 3500));
+    // Wait for socket.io to populate tables (up to 12s)
+    try {
+      await page.waitForFunction(
+        (name) => [...document.querySelectorAll('table')]
+          .filter(t => t.querySelectorAll('td').length >= 8)
+          .some(t => t.innerText.toUpperCase().includes(name)),
+        surname.toUpperCase(),
+        { timeout: 12000, polling: 500 }
+      );
+    } catch { /* fencer not in this pool — that's fine */ }
 
     return await page.evaluate((surnameUpper) => {
       const results = [];
@@ -384,9 +389,16 @@ async function scrapeTableau(eventGUID, tableauGUID, surname) {
   try {
     const page = await browser.newPage();
     await page.goto(`${FTL}/tableaus/scores/${eventGUID}/${tableauGUID}`, {
-      waitUntil: 'networkidle0', timeout: 30000,
+      waitUntil: 'domcontentloaded', timeout: 30000,
     });
-    await new Promise(r => setTimeout(r, 3500));
+    // Wait for socket.io to populate tableau (up to 12s)
+    try {
+      await page.waitForFunction(
+        (name) => document.body.innerText.toUpperCase().includes(name),
+        surname.toUpperCase(),
+        { timeout: 12000, polling: 500 }
+      );
+    } catch { /* fencer not in this tableau */ }
 
     const bouts = await page.evaluate((surnameUpper) => {
       const results = [];
