@@ -1,15 +1,10 @@
-# Railway deployment configuration
-# This file tells Railway how to run the backend
-
 [build]
-builder = "NIXPACKS"
+builder = "nixpacks"
 
 [build.env]
-NIXPACKS_PKGS = "chromium"
+PUPPETEER_SKIP_CHROMIUM_DOWNLOAD = "true"
 
 [deploy]
 startCommand = "npm start"
-healthcheckPath = "/health"
-healthcheckTimeout = 30
-restartPolicyType = "ON_FAILURE"
+restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
