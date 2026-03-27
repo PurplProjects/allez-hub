@@ -485,16 +485,21 @@ async function scrapeTableau(eventGUID, tableauGUID, surname) {
 
         rows.forEach((row, i) => {
           const { text } = row;
-          const scoreMatch = text.match(/(\d+)\s*-\s*(\d+)/);
+          // Strip "Strip N" from text before matching scores to avoid
+          // concatenation like "10 - 7Strip 12" being parsed as "10 - 712"
+          const cleanText = text.replace(/Strip\s*\d+/gi, '').replace(/\s+/g, ' ');
+          const scoreMatch = cleanText.match(/(\d+)\s*-\s*(\d+)/);
           if (!scoreMatch) return;
           if (text.includes('BYE')) return;
 
-          const s1 = parseInt(scoreMatch[1]);
-          const s2 = parseInt(scoreMatch[2]);
+          const s1 = Math.min(parseInt(scoreMatch[1]), 99); // sanity cap
+          const s2 = Math.min(parseInt(scoreMatch[2]), 99);
+          // Validate: DE scores are always 0-15, skip obvious junk
+          if (s1 > 20 || s2 > 20) return;
           const hasOurFencer = text.toUpperCase().includes(surnameUpper);
 
           // Extract winner name from this result row
-          const nameRaw = text.replace(/^\(\d+\)\s*/, '').replace(/\s*\d+\s*-\s*\d+[\s\S]*$/, '').trim();
+          const nameRaw = cleanText.replace(/^\(\d+\)\s*/, '').replace(/\s*\d+\s*-\s*\d+[\s\S]*$/, '').trim();
           const winnerName = extractName(nameRaw);
 
           if (hasOurFencer) {
