@@ -526,7 +526,7 @@ async function scrapeTableau(eventGUID, tableauGUID, surname) {
           }
         });
 
-        break; // Found our fencer in this tableNum — move to next tree
+        // Continue scanning all tables — bouts are spread across table pages
       }
     }
 
