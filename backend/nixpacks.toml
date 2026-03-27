@@ -1,5 +1,5 @@
 [phases.setup]
-nixPkgs = ["nodejs_22", "chromium", "nss", "nspr", "atk", "cups", "libdrm", "mesa", "libgbm", "alsa-lib", "pango", "cairo", "xorg.libX11", "xorg.libXcomposite", "xorg.libXdamage", "xorg.libXext", "xorg.libXfixes", "xorg.libXrandr", "xorg.libxcb", "xorg.libXss", "gtk3", "gdk-pixbuf", "libxkbcommon"]
+nixPkgs = ["nodejs_22", "chromium", "nss", "nspr", "atk", "cups", "libdrm", "mesa", "libgbm", "alsa-lib", "pango", "cairo", "xorg.libX11", "xorg.libXcomposite", "xorg.libXdamage", "xorg.libXext", "xorg.libXfixes", "xorg.libXrandr", "xorg.libXScrnSaver", "xorg.libxcb", "gtk3", "gdk-pixbuf", "libxkbcommon"]
 
 [phases.install]
 cmds = ["npm i"]
@@ -9,6 +9,3 @@ cmds = ["echo 'No build step needed'"]
 
 [start]
 cmd = "PLAYWRIGHT_CHROMIUM_PATH=$(which chromium) npm start"
-
-
-
