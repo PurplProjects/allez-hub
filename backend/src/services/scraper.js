@@ -261,38 +261,43 @@ async function getSharedBrowser() {
   const chromiumPath = findChromium();
   if (!chromiumPath) return null;
 
-  // Reuse existing browser if still connected
-  if (_sharedBrowser && _sharedBrowserPath === chromiumPath) {
-    try {
-      // Check if still alive
-      await _sharedBrowser.contexts();
-      return _sharedBrowser;
-    } catch {
-      _sharedBrowser = null;
-    }
-  }
-
+  // Always launch fresh — shared browser was crashing
+  // Use minimal flags for Railway's sandboxed environment
   const { chromium } = require('playwright-core');
-  _sharedBrowser = await chromium.launch({
+  const browser = await chromium.launch({
     executablePath: chromiumPath,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox', 
+      '--disable-gpu',
+      '--disable-dev-shm-usage',
+      '--disable-extensions',
+      '--disable-background-networking',
+      '--disable-default-apps',
+      '--mute-audio',
+      '--no-first-run',
+      '--single-process',   // key for constrained environments
+    ],
     headless: true,
+    timeout: 30000,
   });
-  _sharedBrowserPath = chromiumPath;
-  console.log(`[Scraper] Browser launched: ${chromiumPath}`);
-  return _sharedBrowser;
+  return browser;
 }
 
 async function scrapePool(eventGUID, poolGUID, surname) {
-  const browser = await getSharedBrowser();
+  let browser;
+  try {
+    browser = await getSharedBrowser();
+  } catch(e) {
+    console.warn(`    Browser launch failed: ${e.message}`);
+    return [];
+  }
   if (!browser) {
     console.warn('    Chromium not found — skipping pool scrape');
     return [];
   }
-  let context;
   try {
-    context = await browser.newContext({ userAgent: HEADERS_HTML['User-Agent'] });
-    const page = await context.newPage();
+    const page = await browser.newPage();
     await page.goto(`${FTL}/pools/scores/${eventGUID}/${poolGUID}`, {
       waitUntil: 'networkidle0', timeout: 30000,
     });
@@ -362,15 +367,19 @@ async function scrapePool(eventGUID, poolGUID, surname) {
 
 // Step 5b: Scrape DE tableau (Puppeteer)
 async function scrapeTableau(eventGUID, tableauGUID, surname) {
-  const browser = await getSharedBrowser();
+  let browser;
+  try {
+    browser = await getSharedBrowser();
+  } catch(e) {
+    console.warn(`    Browser launch failed: ${e.message}`);
+    return [];
+  }
   if (!browser) {
     console.warn('    Chromium not found — skipping tableau scrape');
     return [];
   }
-  let context;
   try {
-    context = await browser.newContext({ userAgent: HEADERS_HTML['User-Agent'] });
-    const page = await context.newPage();
+    const page = await browser.newPage();
     await page.goto(`${FTL}/tableaus/scores/${eventGUID}/${tableauGUID}`, {
       waitUntil: 'networkidle0', timeout: 30000,
     });
