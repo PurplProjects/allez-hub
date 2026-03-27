@@ -407,6 +407,7 @@ async function scrapeFencer(fencer) {
     try {
       // Get FTL tournament URL from UKRatings detail page
       const ftlInfo = await getFTLUrlFromUKR(comp.ukrTourneyId);
+      console.log(`    FTL info for ${comp.ukrTourneyId}: ${ftlInfo ? ftlInfo.ftlTournamentGUID : 'NOT FOUND'}`);
       if (!ftlInfo) {
         console.log(`    No FTL link found — skipping`);
         results.competitions.push({
@@ -427,6 +428,7 @@ async function scrapeFencer(fencer) {
       // Get event GUIDs from FTL schedule
       const eventGUIDs = await getFTLEventGUIDs(ftlInfo.ftlTournamentGUID);
       results.eventsChecked += eventGUIDs.length;
+      console.log(`    FTL event GUIDs found: ${eventGUIDs.length}`);
 
       if (eventGUIDs.length === 0) {
         console.log(`    No events found on FTL schedule`);
@@ -445,7 +447,7 @@ async function scrapeFencer(fencer) {
       }
 
       if (!matchedEvent) {
-        console.log(`    Fencer not found in any FTL event`);
+        console.log(`    Fencer not found in any of ${eventGUIDs.length} FTL events`);
         // Still save the competition record from UKRatings data
         results.competitions.push({
           ukrTourneyId: comp.ukrTourneyId,
