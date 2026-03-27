@@ -215,18 +215,49 @@ async function searchFTLEventForFencer(eventGUID, surname, firstName) {
     const data = await fetchJSON(`${FTL}/events/results/data/${eventGUID}`);
     if (!Array.isArray(data)) return null;
 
+    // Search by surname only (more robust) — firstName may vary
+    const surnameL = surname.toLowerCase();
+    const firstL   = firstName.toLowerCase();
+    
     const match = data.find(f => {
       const s = (f.search || '').toLowerCase();
-      return s.includes(surname.toLowerCase()) &&
-             s.includes(firstName.toLowerCase());
+      // Must match surname; try to also match first name if provided
+      if (!s.includes(surnameL)) return false;
+      if (!firstL) return true;
+      // Check any word in firstName matches any word in search
+      const firstWords = firstL.split(' ').filter(w => w.length > 1);
+      return firstWords.some(w => s.includes(w));
     });
 
     if (!match) return null;
+
+    // Also get pool and tableau GUIDs from event results page
+    let poolGUIDs = [], tableauGUIDs = [], eventName = null;
+    try {
+      const html = await fetchHTML(`${FTL}/events/results/${eventGUID}`);
+      const $ = require('cheerio').load(html);
+      
+      // Get event name from page title
+      eventName = $('h1, h2, .event-title').first().text().trim() || null;
+      
+      $('a[href*="/pools/scores/"]').each((_, a) => {
+        const m = $(a).attr('href').match(/\/pools\/scores\/[A-F0-9]{32}\/([A-F0-9]{32})/i);
+        if (m) { const g = m[1].toUpperCase(); if (!poolGUIDs.includes(g)) poolGUIDs.push(g); }
+      });
+      $('a[href*="/tableaus/scores/"]').each((_, a) => {
+        const m = $(a).attr('href').match(/\/tableaus\/scores\/[A-F0-9]{32}\/([A-F0-9]{32})/i);
+        if (m) { const g = m[1].toUpperCase(); if (!tableauGUIDs.includes(g)) tableauGUIDs.push(g); }
+      });
+    } catch {}
+
     return {
       eventGUID,
-      fencerGUID: match.id,
-      place:      parseInt(match.place) || null,
-      fieldSize:  data.filter(f => !f.excluded).length,
+      fencerGUID:   match.id,
+      place:        parseInt(match.place) || null,
+      fieldSize:    data.filter(f => !f.excluded).length,
+      eventName,
+      poolGUIDs,
+      tableauGUIDs,
     };
   } catch {
     return null;
@@ -573,8 +604,12 @@ function parseDate(str) {
 // ═══════════════════════════════════════════════════════════════
 async function scrapeFencer(fencer) {
   const { ukr_id, name, weapon_id = '34' } = fencer;
-  const [surname, ...firstParts] = name.split(' ');
-  const firstName = firstParts.join(' ');
+  // Name format on UKRatings: "SURNAME FirstName" (surname is first word, all caps)
+  // But FTL uses: "SURNAME FirstName" too
+  // Split: first word = surname, rest = first name
+  const nameParts = name.trim().split(/\s+/);
+  const surname   = nameParts[0];
+  const firstName = nameParts.slice(1).join(' ');
 
   console.log(`
 Scraping ${name} via UKRatings → FTL (full)`);
