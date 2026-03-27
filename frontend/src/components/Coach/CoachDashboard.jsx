@@ -16,6 +16,7 @@ const TABS = [
 
 export default function CoachDashboard() {
   const [activeTab,  setActiveTab]  = useState('squad');
+  const [viewMode,   setViewMode]   = useState('coach'); // 'coach' or 'fencer'
   const [squad,      setSquad]      = useState([]);
   const [selected,   setSelected]   = useState(null);   // drilled-down fencer
   const [detail,     setDetail]     = useState(null);
@@ -72,10 +73,51 @@ export default function CoachDashboard() {
 
   return (
     <div style={{ display:'flex', flexDirection:'column', minHeight:'100vh', background:T.black }}>
-      <TopBar />
+      <TopBar activeView={viewMode} onViewChange={setViewMode} />
       <SectionTabs tabs={TABS} active={activeTab} onChange={t => { setActiveTab(t); setSelected(null); }} />
 
       <div style={{ flex:1, overflowY:'auto', padding:14, display:'flex', flexDirection:'column', gap:10 }}>
+
+        {/* ── FENCER VIEW MODE — select a fencer from squad ── */}
+        {viewMode === 'fencer' && (
+          <div>
+            <div style={{ fontSize:12, color:T.textTertiary, marginBottom:10 }}>Select a fencer to view their performance hub:</div>
+            <div style={{ display:'flex', flexWrap:'wrap', gap:8 }}>
+              {squad.map(f => (
+                <button key={f.id} onClick={() => openFencer(f)} style={{
+                  padding:'8px 14px', background: selected?.id===f.id ? T.primary : T.surface1,
+                  border:`1px solid ${selected?.id===f.id ? T.primary : T.surface2}`,
+                  borderRadius:8, color: selected?.id===f.id ? 'white' : T.textPrimary,
+                  fontSize:13, cursor:'pointer', fontWeight:500,
+                }}>
+                  {f.name}
+                </button>
+              ))}
+            </div>
+            {selected && detail && (
+              <div style={{ marginTop:16, background:T.surface1, borderRadius:12, padding:16 }}>
+                <div style={{ fontSize:16, fontWeight:600, color:T.textPrimary, marginBottom:12 }}>{selected.name}</div>
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:8 }}>
+                  {[
+                    ['Win Rate', (detail.stats?.winPct||0)+'%'],
+                    ['Poule Win%', (detail.stats?.pouleWinPct||0)+'%'],
+                    ['DE Win%', (detail.stats?.deWinPct||0)+'%'],
+                    ['Events', detail.stats?.events||0],
+                    ['Medals', detail.stats?.medals||0],
+                    ['Pool Bouts', detail.stats?.poolBouts||0],
+                    ['DE Bouts', detail.stats?.deBouts||0],
+                    ['Net Score', (detail.stats?.netScore||0)>0?'+'+detail.stats?.netScore:detail.stats?.netScore||0],
+                  ].map(([lbl,val]) => (
+                    <div key={lbl} style={{ background:T.surface2, borderRadius:8, padding:'10px 12px', textAlign:'center' }}>
+                      <div style={{ fontSize:18, fontWeight:700, color:T.textPrimary }}>{val}</div>
+                      <div style={{ fontSize:10, color:T.textTertiary, marginTop:2 }}>{lbl}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* ── SQUAD OVERVIEW ── */}
         {activeTab === 'squad' && !selected && (
