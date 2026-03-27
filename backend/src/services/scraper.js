@@ -127,14 +127,16 @@ async function getFTLUrlFromUKR(ukrTourneyId) {
 async function getFTLEventGUIDs(ftlTournamentGUID) {
   let browser;
   try {
-    const puppeteer = require('puppeteer');
-    browser = await puppeteer.launch({
+    const { chromium } = require('playwright-core');
+    browser = await chromium.launch({
+      executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH ||
+                      process.env.PUPPETEER_EXECUTABLE_PATH ||
+                      '/nix/var/nix/profiles/default/bin/chromium',
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu'],
-      headless: 'new',
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
+      headless: true,
     });
-    const page = await browser.newPage();
-    await page.setUserAgent(HEADERS_HTML['User-Agent']);
+    const context = await browser.newContext({ userAgent: HEADERS_HTML['User-Agent'] });
+    const page = await context.newPage();
     await page.goto(
       `${FTL}/tournaments/eventSchedule/${ftlTournamentGUID}`,
       { waitUntil: 'networkidle0', timeout: 25000 }
@@ -192,14 +194,16 @@ async function searchFTLEventForFencer(eventGUID, surname, firstName) {
 async function scrapePool(eventGUID, poolGUID, surname) {
   let browser;
   try {
-    const puppeteer = require('puppeteer');
-    browser = await puppeteer.launch({
+    const { chromium } = require('playwright-core');
+    browser = await chromium.launch({
+      executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH ||
+                      process.env.PUPPETEER_EXECUTABLE_PATH ||
+                      '/nix/var/nix/profiles/default/bin/chromium',
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu'],
-      headless: 'new',
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
+      headless: true,
     });
-    const page = await browser.newPage();
-    await page.setUserAgent(HEADERS_HTML['User-Agent']);
+    const context = await browser.newContext({ userAgent: HEADERS_HTML['User-Agent'] });
+    const page = await context.newPage();
     await page.goto(`${FTL}/pools/scores/${eventGUID}/${poolGUID}`, {
       waitUntil: 'networkidle0', timeout: 30000,
     });
@@ -271,14 +275,16 @@ async function scrapePool(eventGUID, poolGUID, surname) {
 async function scrapeTableau(eventGUID, tableauGUID, surname) {
   let browser;
   try {
-    const puppeteer = require('puppeteer');
-    browser = await puppeteer.launch({
+    const { chromium } = require('playwright-core');
+    browser = await chromium.launch({
+      executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH ||
+                      process.env.PUPPETEER_EXECUTABLE_PATH ||
+                      '/nix/var/nix/profiles/default/bin/chromium',
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu'],
-      headless: 'new',
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
+      headless: true,
     });
-    const page = await browser.newPage();
-    await page.setUserAgent(HEADERS_HTML['User-Agent']);
+    const context = await browser.newContext({ userAgent: HEADERS_HTML['User-Agent'] });
+    const page = await context.newPage();
     await page.goto(`${FTL}/tableaus/scores/${eventGUID}/${tableauGUID}`, {
       waitUntil: 'networkidle0', timeout: 30000,
     });
