@@ -1,8 +1,15 @@
 [phases.setup]
-nixPkgs = ["nodejs_22"]
+nixPkgs = ["nodejs_22", "chromium"]
 
 [phases.install]
 cmds = ["npm i"]
 
 [start]
-cmd = "npm start"
+cmd = "PLAYWRIGHT_CHROMIUM_PATH=$(which chromium) npm start"
+```
+
+Just `nodejs_22` and `chromium` — no other packages. Nix's `chromium` package bundles all its own dependencies, so we don't need to list them separately. This was the mistake before — listing `libgbm`, `mesa` etc separately caused collisions because `chromium` already includes them.
+
+**3. After Railway redeploys** — trigger a new sync. The startup log should show:
+```
+[Scraper] Chromium: /nix/var/nix/profiles/default/bin/chromium
