@@ -30,7 +30,7 @@ router.get('/squad', async (req, res) => {
     const b = bouts || [];
     const won   = b.filter(x => x.result === 'Won').length;
     const poule = b.filter(x => x.bout_type === 'Poule');
-    const de    = b.filter(x => x.bout_type === 'DE');
+    const de    = b.filter(x => x.bout_type?.startsWith('DE'));
 
     // Year comparison for trend
     const thisYear = new Date().getFullYear().toString();
