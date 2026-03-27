@@ -9,6 +9,6 @@ cmds = ["echo 'No build step needed'"]
 
 [start]
 cmd = "PLAYWRIGHT_CHROMIUM_PATH=$(which chromium) npm start"
-```
+
 
 
