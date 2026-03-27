@@ -787,7 +787,11 @@ async function saveScrapedData(fencerId, scrapedResults) {
         source:         savedComp.source,
       }, { onConflict: 'fencer_id,competition_id,opponent,bout_type' });
 
-      if (!error) boutsAdded++;
+      if (error) {
+        console.warn(`    Bout save error (${bout.opponent}): ${error.message}`);
+      } else {
+        boutsAdded++;
+      }
     }
   }
 
