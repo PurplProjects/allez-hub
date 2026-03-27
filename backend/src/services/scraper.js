@@ -33,6 +33,21 @@ const HEADERS_JSON = {
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// Log chromium path on startup for debugging
+(function() {
+  const fs = require('fs');
+  const candidates = [
+    process.env.PLAYWRIGHT_CHROMIUM_PATH,
+    process.env.PUPPETEER_EXECUTABLE_PATH,
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/google-chrome',
+    '/nix/var/nix/profiles/default/bin/chromium',
+  ].filter(Boolean);
+  const found = candidates.find(p => { try { return fs.existsSync(p); } catch { return false; } });
+  console.log(`[Scraper] Chromium: ${found || 'NOT FOUND — pool/tableau scraping disabled'}`);
+})();
+
 // Cookie jar for UKRatings — handles session cookies across redirects
 const https    = require('https');
 const http     = require('http');
@@ -219,14 +234,35 @@ async function searchFTLEventForFencer(eventGUID, surname, firstName) {
 }
 
 // Step 5a: Scrape pool scores (Puppeteer)
+// Find chromium executable — try multiple locations
+function findChromium() {
+  const candidates = [
+    process.env.PLAYWRIGHT_CHROMIUM_PATH,
+    process.env.PUPPETEER_EXECUTABLE_PATH,
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/google-chrome',
+    '/nix/var/nix/profiles/default/bin/chromium',
+  ].filter(Boolean);
+  
+  const fs = require('fs');
+  for (const p of candidates) {
+    try { if (fs.existsSync(p)) return p; } catch {}
+  }
+  return null;
+}
+
 async function scrapePool(eventGUID, poolGUID, surname) {
+  const chromiumPath = findChromium();
+  if (!chromiumPath) {
+    console.warn('    Chromium not found — skipping pool scrape');
+    return [];
+  }
   let browser;
   try {
     const { chromium } = require('playwright-core');
     browser = await chromium.launch({
-      executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH ||
-                      process.env.PUPPETEER_EXECUTABLE_PATH ||
-                      '/nix/var/nix/profiles/default/bin/chromium',
+      executablePath: chromiumPath,
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu'],
       headless: true,
     });
@@ -301,13 +337,16 @@ async function scrapePool(eventGUID, poolGUID, surname) {
 
 // Step 5b: Scrape DE tableau (Puppeteer)
 async function scrapeTableau(eventGUID, tableauGUID, surname) {
+  const chromiumPath = findChromium();
+  if (!chromiumPath) {
+    console.warn('    Chromium not found — skipping tableau scrape');
+    return [];
+  }
   let browser;
   try {
     const { chromium } = require('playwright-core');
     browser = await chromium.launch({
-      executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH ||
-                      process.env.PUPPETEER_EXECUTABLE_PATH ||
-                      '/nix/var/nix/profiles/default/bin/chromium',
+      executablePath: chromiumPath,
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu'],
       headless: true,
     });
