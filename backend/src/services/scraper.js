@@ -281,99 +281,92 @@ async function getSharedBrowser() {
 }
 
 async function scrapePool(eventGUID, poolGUID, surname) {
-  let browser;
+  // Pure HTTP approach — no Playwright needed
+  // 1. Fetch pool page to get var ids = [...] (pool sub-GUIDs in raw HTML)
+  // 2. Fetch each ?dbut=true endpoint → parse pool table with cheerio
   try {
-    browser = await getSharedBrowser();
-  } catch(e) {
-    console.warn(`    Browser launch failed: ${e.message}`);
-    return [];
-  }
-  if (!browser) {
-    console.warn('    Chromium not found — skipping pool scrape');
-    return [];
-  }
-  try {
-    const page = await browser.newPage();
-    await page.goto(`${FTL}/pools/scores/${eventGUID}/${poolGUID}`, {
-      waitUntil: 'domcontentloaded', timeout: 30000,
-    });
-    // Wait for socket.io to populate tables (up to 12s)
-    try {
-      await page.waitForFunction(
-        (name) => [...document.querySelectorAll('table')]
-          .filter(t => t.querySelectorAll('td').length >= 8)
-          .some(t => t.innerText.toUpperCase().includes(name)),
-        surname.toUpperCase(),
-        { timeout: 12000, polling: 500 }
-      );
-    } catch { /* fencer not in this pool — that's fine */ }
+    const poolPageUrl = `${FTL}/pools/scores/${eventGUID}/${poolGUID}`;
+    const pageRes = await axios.get(poolPageUrl, { headers: HEADERS_HTML, timeout: 15000 });
+    const pageHtml = pageRes.data;
 
-    return await page.evaluate((surnameUpper) => {
-      const results = [];
+    // Extract pool sub-GUIDs from inline JS: var ids = ["GUID1","GUID2",...]
+    const idsMatch = pageHtml.match(/var ids = \[([\s\S]*?)\];/);
+    const subGuids = idsMatch ? [...idsMatch[1].matchAll(/([A-F0-9]{32})/gi)].map(m => m[1]) : [];
 
-      document.querySelectorAll('table').forEach(table => {
-        const rows = [...table.querySelectorAll('tr')];
-        if (!rows.some(r => r.innerText.toUpperCase().includes(surnameUpper))) return;
+    if (subGuids.length === 0) {
+      console.warn(`      No pool sub-GUIDs found for pool ${poolGUID}`);
+      return [];
+    }
 
-        // Get data rows — must have at least 8 cells (name, pos, scores..., stats)
-        const dataRows = rows.filter(r => r.querySelectorAll('td').length >= 8);
-        if (dataRows.length < 2) return;
+    const surnameUpper = surname.toUpperCase();
+    const bouts = [];
 
-        // Build fencer list
-        const fencers = dataRows.map(row => ({
-          name:  [...row.querySelectorAll('td')][0].innerText.trim().split('\n')[0].trim(),
-          cells: [...row.querySelectorAll('td')],
-        }));
+    // Try each sub-GUID until we find the one with our fencer
+    for (const subGuid of subGuids) {
+      const boutUrl = `${FTL}/pools/scores/${eventGUID}/${poolGUID}/${subGuid}?dbut=true`;
+      const boutRes = await axios.get(boutUrl, { headers: HEADERS_HTML, timeout: 10000 });
+      const boutHtml = boutRes.data;
 
-        const ourIdx = fencers.findIndex(f => f.name.toUpperCase().includes(surnameUpper));
-        if (ourIdx === -1) return;
+      if (!boutHtml.toUpperCase().includes(surnameUpper)) continue;
 
-        const ourCells = fencers[ourIdx].cells;
+      // Parse with cheerio
+      const $ = cheerio.load(boutHtml);
+      const dataRows = [];
 
-        fencers.forEach((opp, oppIdx) => {
-          if (oppIdx === ourIdx) return;
+      $('table tr').each((_, row) => {
+        const cells = $(row).find('td');
+        if (cells.length >= 8) dataRows.push(cells);
+      });
 
-          // Score columns start at index 2, one per opponent position
-          const scoreCell = ourCells[2 + oppIdx];
-          if (!scoreCell) return;
-          const txt = scoreCell.innerText.trim();
-          if (!txt) return;
+      if (dataRows.length < 2) continue;
 
-          const isWin    = txt.startsWith('V');
-          const ourScore = parseInt(txt.replace(/[VD]/g, '')) || 0;
+      // Build fencer list
+      const fencers = dataRows.map(cells => ({
+        name: $(cells[0]).text().trim().split('\n')[0].trim(),
+        cells,
+      }));
 
-          const oppTxt   = opp.cells[2 + ourIdx]?.innerText?.trim() || '';
-          const oppScore = parseInt(oppTxt.replace(/[VD]/g, '')) || 0;
+      const ourIdx = fencers.findIndex(f => f.name.toUpperCase().includes(surnameUpper));
+      if (ourIdx === -1) continue;
 
-          // Format name: "SURNAME First" → "First Surname"
-          const parts   = opp.name.split(' ');
-          const fmtName = parts.length > 1
-            ? parts.slice(1).map(w => w[0] + w.slice(1).toLowerCase()).join(' ')
-              + ' ' + parts[0][0] + parts[0].slice(1).toLowerCase()
-            : opp.name;
+      const ourCells = fencers[ourIdx].cells;
 
-          results.push({
-            opponent:     fmtName,
-            scoreFor:     isWin ? ourScore : oppScore,
-            scoreAgainst: isWin ? oppScore : ourScore,
-            result:       isWin ? 'Won' : 'Lost',
-            type:         'Poule',
-          });
+      fencers.forEach((opp, oppIdx) => {
+        if (oppIdx === ourIdx) return;
+        const txt = $(ourCells[2 + oppIdx]).text().trim();
+        if (!txt) return;
+
+        const isWin    = txt.startsWith('V');
+        const ourScore = parseInt(txt.replace(/[VD]/g, '')) || 0;
+        const oppTxt   = $(opp.cells[2 + ourIdx]).text().trim();
+        const oppScore = parseInt(oppTxt.replace(/[VD]/g, '')) || 0;
+
+        // Format: "SURNAME First" → "First Surname"
+        const parts   = opp.name.split(' ');
+        const fmtName = parts.length > 1
+          ? parts.slice(1).join(' ') + ' ' + parts[0][0] + parts[0].slice(1).toLowerCase()
+          : opp.name;
+
+        bouts.push({
+          opponent:     fmtName,
+          scoreFor:     isWin ? ourScore : oppScore,
+          scoreAgainst: isWin ? oppScore : ourScore,
+          result:       isWin ? 'Won' : 'Lost',
+          type:         'Poule',
         });
       });
 
-      return results;
-    }, surname.toUpperCase());
+      break; // Found our pool — no need to check others
+    }
 
+    return bouts;
   } catch (err) {
-    console.warn(`    Pool scrape failed: ${err.message}`);
+    console.warn(`      Pool scrape failed: ${err.message}`);
     return [];
-  } finally {
-    if (browser) await browser.close().catch(() => {});
   }
 }
 
-// Step 5b: Scrape DE tableau (Puppeteer)
+
 async function scrapeTableau(eventGUID, tableauGUID, surname) {
   let browser;
   try {
