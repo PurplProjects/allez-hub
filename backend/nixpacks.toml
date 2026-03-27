@@ -1,8 +1,20 @@
 [phases.setup]
-nixPkgs = ["nodejs_22", "chromium"]
+nixPkgs = ["nodejs_22", "chromium", "nss", "nspr", "atk", "cups", "libdrm", "mesa", "libgbm", "alsa-lib", "pango", "cairo", "xorg.libX11", "xorg.libXcomposite", "xorg.libXdamage", "xorg.libXext", "xorg.libXfixes", "xorg.libXrandr", "xorg.libxcb", "xorg.libXss", "gtk3", "gdk-pixbuf", "libxkbcommon"]
 
 [phases.install]
 cmds = ["npm i"]
 
+[phases.build]
+cmds = ["echo 'No build step needed'"]
+
 [start]
-cmd = "npm start"
+cmd = "PLAYWRIGHT_CHROMIUM_PATH=$(which chromium) npm start"
+```
+
+**Why this is better than Puppeteer:**
+
+`playwright-core` is a tiny package (~2MB) with no bundled browser — it just provides the browser automation API. The actual Chromium comes from Nix via `nixpacks.toml`, which is cached between builds and installs in seconds. `puppeteer` without `PUPPETEER_SKIP_CHROMIUM_DOWNLOAD` downloads ~170MB of Chromium every build — that's what was timing out. The `nixpacks.toml` lists all the system libraries Chromium needs so it runs properly at runtime.
+
+Also add this environment variable in Railway dashboard:
+```
+PLAYWRIGHT_CHROMIUM_PATH = /nix/var/nix/profiles/default/bin/chromium
