@@ -3,6 +3,7 @@ builder = "nixpacks"
 
 [build.env]
 PUPPETEER_SKIP_CHROMIUM_DOWNLOAD = "true"
+PUPPETEER_EXECUTABLE_PATH = "/nix/var/nix/profiles/default/bin/chromium"
 
 [deploy]
 startCommand = "npm start"
