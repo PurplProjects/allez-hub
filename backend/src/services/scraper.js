@@ -368,386 +368,113 @@ async function scrapePool(eventGUID, poolGUID, surname) {
 
 
 async function scrapeTableau(eventGUID, tableauGUID, surname) {
-  let browser;
+  // Pure HTTP approach — uses /trees and /trees/{guid}/tables/{n}/{count} endpoints
   try {
-    browser = await getSharedBrowser();
-  } catch(e) {
-    console.warn(`    Browser launch failed: ${e.message}`);
-    return [];
-  }
-  if (!browser) {
-    console.warn('    Chromium not found — skipping tableau scrape');
-    return [];
-  }
-  try {
-    const page = await browser.newPage();
-    await page.goto(`${FTL}/tableaus/scores/${eventGUID}/${tableauGUID}`, {
-      waitUntil: 'domcontentloaded', timeout: 30000,
-    });
-    // Wait for socket.io to populate tableau (up to 12s)
-    try {
-      await page.waitForFunction(
-        (name) => document.body.innerText.toUpperCase().includes(name),
-        surname.toUpperCase(),
-        { timeout: 12000, polling: 500 }
-      );
-    } catch { /* fencer not in this tableau */ }
+    const surnameUpper = surname.toUpperCase();
+    const bouts = [];
 
-    const bouts = await page.evaluate((surnameUpper) => {
-      const results = [];
-      document.querySelectorAll('tr').forEach(row => {
-        const cells = [...row.querySelectorAll('td')];
-        if (cells.length < 3) return;
-        const texts    = cells.map(c => c.innerText.trim());
-        const ourIdx   = texts.findIndex(t => t.toUpperCase().includes(surnameUpper));
-        if (ourIdx === -1) return;
-        const scoreP   = /^\d+$/;
-        const s1Idx    = texts.findIndex((t, i) => i !== ourIdx && scoreP.test(t));
-        if (s1Idx === -1) return;
-        const oppIdx   = texts.findIndex((t, i) => i !== ourIdx && i !== s1Idx && t.length > 2 && !scoreP.test(t));
-        if (oppIdx === -1) return;
-        const s2Idx    = texts.findIndex((t, i) => i !== s1Idx && i !== ourIdx && i !== oppIdx && scoreP.test(t));
-        if (s2Idx === -1) return;
-        const s1       = parseInt(texts[s1Idx]);
-        const s2       = parseInt(texts[s2Idx]);
-        const ourScore = ourIdx < oppIdx ? s1 : s2;
-        const oppScore = ourIdx < oppIdx ? s2 : s1;
-        if (ourScore === 0 && oppScore === 0) return;
-        results.push({
-          opponent:     texts[oppIdx],
-          scoreFor:     ourScore,
-          scoreAgainst: oppScore,
-          result:       ourScore > oppScore ? 'Won' : 'Lost',
-          type:         'DE',
+    // Step 1: get trees (bracket divisions)
+    const treesUrl = `${FTL}/tableaus/scores/${eventGUID}/${tableauGUID}/trees`;
+    const treesRes = await axios.get(treesUrl, { headers: HEADERS_HTML, timeout: 10000 });
+    const trees = treesRes.data;
+    if (!Array.isArray(trees) || trees.length === 0) return [];
+
+    const roundNames = [
+      'Table of 128','Table of 64','Table of 32','Table of 16',
+      'Quarter-Final','Semi-Final','Final'
+    ];
+
+    for (const tree of trees) {
+      for (let tableNum = 0; tableNum < (tree.numTables || 0); tableNum++) {
+        const tableUrl = `${FTL}/tableaus/scores/${eventGUID}/${tableauGUID}/trees/${tree.guid}/tables/${tableNum}/4`;
+        const tableRes = await axios.get(tableUrl, { headers: HEADERS_HTML, timeout: 10000 });
+        const html = tableRes.data;
+
+        if (!html.toUpperCase().includes(surnameUpper)) continue;
+
+        const $ = cheerio.load(html);
+        const roundName = roundNames[tableNum] || `Round ${tableNum + 1}`;
+
+        // Walk all TRs, find ones containing our fencer
+        $('tr').each((_, row) => {
+          const rowText = $(row).text().trim();
+          if (!rowText.toUpperCase().includes(surnameUpper)) return;
+          if (rowText.toUpperCase().includes('BYE')) return;
+
+          // Check adjacent rows for score + opponent
+          const $row = $(row);
+          [$row.prev(), $row.next()].forEach($nearby => {
+            const nearbyText = $nearby.text().trim();
+            if (!nearbyText) return;
+
+            const scoreMatch = nearbyText.match(/(\d+)\s*-\s*(\d+)/);
+            if (!scoreMatch) return;
+            if (nearbyText.toUpperCase().includes('BYE')) return;
+
+            // Parse opponent name: remove seed "(N) " prefix, club, strip info, scores
+            let oppRaw = nearbyText
+              .replace(/^\(\d+\)\s*/, '')          // remove seed
+              .replace(/\d+\s*-\s*\d+.*/s, '')      // remove score onwards
+              .replace(/Strip\s*\d+/i, '')            // remove strip
+              .trim().split('\n')[0].trim();
+
+            // Remove club name (after the person's name, often uppercase)
+            // Name format: "SURNAME FirstOPPCLUB" — split on uppercase run
+            const nameMatch = oppRaw.match(/^([A-Z\s\-]+[a-z][A-Za-z\s\-]*)/);
+            const oppName = nameMatch ? nameMatch[1].trim() : oppRaw;
+
+            if (!oppName || oppName.length < 3) return;
+
+            const s1 = parseInt(scoreMatch[1]);
+            const s2 = parseInt(scoreMatch[2]);
+
+            // If nearby row contains our fencer = nearby is our win (we scored higher)
+            // If nearby row is opponent's result row, determine win/loss from scores
+            const nearbyHasUs = nearbyText.toUpperCase().includes(surnameUpper);
+            let scoreFor, scoreAgainst, result;
+
+            if (nearbyHasUs) {
+              // The nearby row is our result — score shown is our win score
+              scoreFor = Math.max(s1, s2);
+              scoreAgainst = Math.min(s1, s2);
+              result = 'Won';
+            } else {
+              // Nearby row is opponent's — they beat us or we beat them
+              // The higher score belongs to winner; check which row has our name
+              // If our name row comes AFTER opponent, we lost (opponent scored first in bracket)
+              scoreFor = s1;
+              scoreAgainst = s2;
+              result = s1 > s2 ? 'Won' : 'Lost';
+            }
+
+            // Format name: "SURNAME First" → "First Surname"  
+            const parts = oppName.split(' ');
+            const fmtName = parts.length > 1
+              ? parts.slice(1).join(' ') + ' ' + parts[0][0] + parts[0].slice(1).toLowerCase()
+              : oppName;
+
+            bouts.push({
+              opponent:     fmtName,
+              scoreFor,
+              scoreAgainst,
+              result,
+              type:         `DE ${roundName}`,
+            });
+          });
         });
-      });
-      const seen = new Set();
-      return results.filter(b => {
-        const k = `${b.opponent}|${b.scoreFor}|${b.scoreAgainst}`;
-        if (seen.has(k)) return false;
-        seen.add(k);
-        return true;
-      });
-    }, surname.toUpperCase());
+
+        break; // Found our fencer in this tableNum, move to next tree
+      }
+    }
 
     return bouts;
   } catch (err) {
-    console.warn(`    Tableau scrape failed: ${err.message}`);
+    console.warn(`      Tableau scrape failed: ${err.message}`);
     return [];
-  } finally {
-    if (browser) await browser.close().catch(() => {});
   }
 }
 
-// Helper: get pool + tableau URLs from FTL event results page
-async function getEventRoundURLs(eventGUID) {
-  try {
-    const html = await fetchHTML(`${FTL}/events/results/${eventGUID}`);
-    const poolM = [...html.matchAll(/\/pools\/scores\/([A-F0-9]{32})\/([A-F0-9]{32})/gi)];
-    const tabM  = [...html.matchAll(/\/tableaus\/scores\/([A-F0-9]{32})\/([A-F0-9]{32})/gi)];
-    const pools    = [...new Map(poolM.map(m => [m[2], { eventGUID: m[1], poolGUID:    m[2] }])).values()];
-    const tableaux = [...new Map(tabM.map( m => [m[2], { eventGUID: m[1], tableauGUID: m[2] }])).values()];
-    const nameM    = html.match(/<title>([^<]+)<\/title>/i);
-    const eventName = nameM ? nameM[1].replace(' - Fencing Time Live','').trim() : null;
-    const dateM    = html.match(/(\w+ \d+, \d{4})/);
-    const eventDate = dateM ? parseDate(dateM[1]) : null;
-    return { pools, tableaux, eventName, eventDate };
-  } catch {
-    return { pools: [], tableaux: [], eventName: null, eventDate: null };
-  }
-}
 
-// ═══════════════════════════════════════════════════════════════
-// MAIN — scrape UK tournaments for a fencer
-// ═══════════════════════════════════════════════════════════════
-async function scrapeFencer(fencer) {
-  const surname   = fencer.name.split(' ').pop();
-  const firstName = fencer.name.split(' ')[0];
-
-  const lastSyncDate = await getLastSyncDate(fencer.id);
-  const syncMode     = lastSyncDate ? 'incremental' : 'full';
-
-  console.log(`\nScraping ${fencer.name} via UKRatings → FTL (${syncMode})`);
-
-  const results = {
-    competitions: [], errors: [], syncMode,
-    lastSyncDate: lastSyncDate?.toISOString().slice(0,10) || null,
-    tournamentsChecked: 0, eventsChecked: 0,
-  };
-
-  if (!fencer.ukr_id) {
-    results.errors.push('No UKRatings ID set for this fencer');
-    return results;
-  }
-
-  // Step 1: Get tournament list from UKRatings
-  let ukrComps;
-  try {
-    ukrComps = await getUKRTournaments(fencer.ukr_id, fencer.ukr_weapon_id || '34');
-    console.log(`  UKRatings returned ${ukrComps.length} competitions`);
-    if (ukrComps.length > 0) {
-      console.log(`  Sample: ${ukrComps.slice(0,3).map(c => c.ukrTourneyId + ':' + c.name).join(', ')}`);
-    }
-  } catch (err) {
-    console.error(`  UKRatings fetch ERROR: ${err.message}`, err.stack);
-    results.errors.push(`UKRatings fetch failed: ${err.message}`);
-    return results;
-  }
-
-  // For incremental sync — only process tournaments not already in DB
-  if (syncMode === 'incremental') {
-    const { data: existing } = await supabase
-      .from('competitions')
-      .select('ukr_tourney_id')
-      .eq('fencer_id', fencer.id);
-    const existingIds = new Set((existing || []).map(c => c.ukr_tourney_id));
-    ukrComps = ukrComps.filter(c => !existingIds.has(c.ukrTourneyId));
-    console.log(`  Incremental: ${ukrComps.length} new tournaments to process`);
-  }
-
-  results.tournamentsChecked = ukrComps.length;
-
-  // Step 2-5: For each tournament, get FTL link and scrape bouts
-  for (const comp of ukrComps) {
-    console.log(`  → ${comp.name}`);
-    await sleep(500);
-
-    try {
-      // Get FTL tournament URL from UKRatings detail page
-      const ftlInfo = await getFTLUrlFromUKR(comp.ukrTourneyId);
-      console.log(`    FTL info for ${comp.ukrTourneyId}: ${ftlInfo ? ftlInfo.ftlTournamentGUID : 'NOT FOUND'}`);
-      if (!ftlInfo) {
-        console.log(`    No FTL link found — skipping`);
-        results.competitions.push({
-          ukrTourneyId: comp.ukrTourneyId,
-          name:         comp.name,
-          eventName:    comp.eventName,
-          rank:         comp.rank,
-          fieldSize:    comp.fieldSize,
-          poolBouts:    [],
-          deBouts:      [],
-          noFTL:        true,
-        });
-        continue;
-      }
-
-      await sleep(300);
-
-      // Get event GUIDs from FTL schedule
-      const eventGUIDs = await getFTLEventGUIDs(ftlInfo.ftlTournamentGUID);
-      results.eventsChecked += eventGUIDs.length;
-      console.log(`    FTL event GUIDs found: ${eventGUIDs.length}`);
-
-      if (eventGUIDs.length === 0) {
-        console.log(`    No events found on FTL schedule`);
-        continue;
-      }
-
-      // Find the specific event this fencer competed in
-      let matchedEvent = null;
-      for (const eventGUID of eventGUIDs) {
-        await sleep(150);
-        const match = await searchFTLEventForFencer(eventGUID, surname, firstName);
-        if (match) {
-          matchedEvent = match;
-          break;
-        }
-      }
-
-      if (!matchedEvent) {
-        console.log(`    Fencer not found in any of ${eventGUIDs.length} FTL events`);
-        // Still save the competition record from UKRatings data
-        results.competitions.push({
-          ukrTourneyId: comp.ukrTourneyId,
-          name:         comp.name,
-          eventName:    comp.eventName,
-          rank:         comp.rank,
-          fieldSize:    comp.fieldSize,
-          poolBouts:    [],
-          deBouts:      [],
-        });
-        continue;
-      }
-
-      await sleep(300);
-
-      // Get pool and tableau URLs
-      const { pools, tableaux, eventName, eventDate } = await getEventRoundURLs(matchedEvent.eventGUID);
-
-      // Scrape pool bouts
-      const poolBouts = [];
-      for (const pool of pools) {
-        const bouts = await scrapePool(pool.eventGUID, pool.poolGUID, surname);
-        poolBouts.push(...bouts);
-        await sleep(200);
-      }
-
-      // Scrape DE bouts
-      const deBouts = [];
-      for (const tableau of tableaux) {
-        const bouts = await scrapeTableau(tableau.eventGUID, tableau.tableauGUID, surname);
-        deBouts.push(...bouts);
-        await sleep(200);
-      }
-
-      results.competitions.push({
-        ukrTourneyId:  comp.ukrTourneyId,
-        ftlEventGUID:  matchedEvent.eventGUID,
-        name:          eventName || comp.name,
-        eventName:     comp.eventName,
-        date:          eventDate,
-        rank:          matchedEvent.place || comp.rank,
-        fieldSize:     matchedEvent.fieldSize || comp.fieldSize,
-        poolBouts,
-        deBouts,
-      });
-
-      console.log(`    ✓ ${poolBouts.length} pool + ${deBouts.length} DE bouts`);
-
-    } catch (err) {
-      console.warn(`    Error: ${err.message}`);
-      results.errors.push(`${comp.name}: ${err.message}`);
-    }
-  }
-
-  return results;
-}
-
-// ═══════════════════════════════════════════════════════════════
-// SECONDARY PATH — Manual FTL URL entry
-// Used by "Add Tournament" feature for non-UK events
-// ═══════════════════════════════════════════════════════════════
-
-/**
- * Scrape a single tournament from an FTL URL.
- *
- * fencerMode: load bouts only for the specified fencer
- * coachMode:  find ALL Allez fencers in the event and load everyone's bouts
- *
- * @param {string} ftlUrl   - FTL URL (event results or tournament schedule)
- * @param {object} options
- *   @param {string}   options.fencerId    - fencer to load for (fencer mode)
- *   @param {string}   options.fencerName  - name to search for
- *   @param {string[]} options.allFencers  - array of {id, name} for coach mode
- *   @param {boolean}  options.coachMode   - if true, find all Allez fencers
- */
-async function scrapeFromFTLUrl(ftlUrl, options = {}) {
-  console.log(`\nManual FTL scrape: ${ftlUrl}`);
-
-  // Extract event GUID from URL
-  // Handles both:
-  //   /events/results/{GUID}
-  //   /events/view/{GUID}
-  //   /tournaments/eventSchedule/{GUID}
-  const eventMatch = ftlUrl.match(/\/events\/(?:results|view)\/([A-F0-9]{32})/i);
-  const tournamentMatch = ftlUrl.match(/\/tournaments\/[^/]+\/([A-F0-9]{32})/i);
-
-  let eventGUIDs = [];
-
-  if (eventMatch) {
-    // Direct event URL — just one event
-    eventGUIDs = [eventMatch[1].toUpperCase()];
-  } else if (tournamentMatch) {
-    // Tournament schedule URL — get all events
-    const tournamentGUID = tournamentMatch[1].toUpperCase();
-    eventGUIDs = await getFTLEventGUIDs(tournamentGUID);
-    console.log(`  Found ${eventGUIDs.length} events in tournament`);
-  } else {
-    throw new Error('Could not extract event or tournament GUID from URL');
-  }
-
-  const results = {};
-
-  if (options.coachMode && options.allFencers?.length > 0) {
-    // Coach mode: find all Allez fencers across all events
-    console.log(`  Coach mode: searching for ${options.allFencers.length} fencers`);
-
-    for (const f of options.allFencers) {
-      const surname   = f.name.split(' ').pop();
-      const firstName = f.name.split(' ')[0];
-      results[f.id]   = { fencer: f, competitions: [], errors: [] };
-
-      for (const eventGUID of eventGUIDs) {
-        await sleep(200);
-        const match = await searchFTLEventForFencer(eventGUID, surname, firstName);
-        if (!match) continue;
-
-        const { pools, tableaux, eventName, eventDate } = await getEventRoundURLs(eventGUID);
-
-        const poolBouts = [];
-        for (const pool of pools) {
-          const bouts = await scrapePool(pool.eventGUID, pool.poolGUID, surname);
-          poolBouts.push(...bouts);
-          await sleep(200);
-        }
-
-        const deBouts = [];
-        for (const tableau of tableaux) {
-          const bouts = await scrapeTableau(tableau.eventGUID, tableau.tableauGUID, surname);
-          deBouts.push(...bouts);
-          await sleep(200);
-        }
-
-        results[f.id].competitions.push({
-          ftlEventGUID: eventGUID,
-          name:         eventName || 'Manual tournament',
-          date:         eventDate,
-          rank:         match.place,
-          fieldSize:    match.fieldSize,
-          poolBouts,
-          deBouts,
-        });
-
-        console.log(`  ✓ ${f.name}: ${poolBouts.length} pool + ${deBouts.length} DE bouts`);
-      }
-    }
-  } else {
-    // Fencer mode: load bouts for one fencer
-    const surname   = options.fencerName.split(' ').pop();
-    const firstName = options.fencerName.split(' ')[0];
-    results[options.fencerId] = { fencer: { id: options.fencerId, name: options.fencerName }, competitions: [], errors: [] };
-
-    for (const eventGUID of eventGUIDs) {
-      await sleep(200);
-      const match = await searchFTLEventForFencer(eventGUID, surname, firstName);
-      if (!match) continue;
-
-      const { pools, tableaux, eventName, eventDate } = await getEventRoundURLs(eventGUID);
-
-      const poolBouts = [];
-      for (const pool of pools) {
-        const bouts = await scrapePool(pool.eventGUID, pool.poolGUID, surname);
-        poolBouts.push(...bouts);
-        await sleep(200);
-      }
-
-      const deBouts = [];
-      for (const tableau of tableaux) {
-        const bouts = await scrapeTableau(tableau.eventGUID, tableau.tableauGUID, surname);
-        deBouts.push(...bouts);
-        await sleep(200);
-      }
-
-      results[options.fencerId].competitions.push({
-        ftlEventGUID: eventGUID,
-        name:         eventName || 'Manual tournament',
-        date:         eventDate,
-        rank:         match.place,
-        fieldSize:    match.fieldSize,
-        poolBouts,
-        deBouts,
-      });
-
-      console.log(`  ✓ ${poolBouts.length} pool + ${deBouts.length} DE bouts`);
-    }
-  }
-
-  return results;
-}
-
-// ═══════════════════════════════════════════════════════════════
-// SAVE TO SUPABASE
-// ═══════════════════════════════════════════════════════════════
 async function saveScrapedData(fencerId, scrapedResults) {
   let boutsAdded = 0;
 
