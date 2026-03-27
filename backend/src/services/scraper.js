@@ -566,4 +566,116 @@ function parseDate(str) {
   } catch { return null; }
 }
 
+
+// ═══════════════════════════════════════════════════════════════
+// Main orchestration — runs all steps for a fencer
+// Processes tournaments in parallel (batches of 5) for speed
+// ═══════════════════════════════════════════════════════════════
+async function scrapeFencer(fencer) {
+  const { ukr_id, name, weapon_id = '34' } = fencer;
+  const [surname, ...firstParts] = name.split(' ');
+  const firstName = firstParts.join(' ');
+
+  console.log(`
+Scraping ${name} via UKRatings → FTL (full)`);
+
+  // Step 1: Get all tournaments from UKRatings
+  const ukrComps = await getUKRTournaments(ukr_id, weapon_id);
+  const results = {
+    competitions: [],
+    tournamentsChecked: ukrComps.length,
+    eventsChecked: 0,
+    syncMode: 'full',
+    errors: [],
+  };
+
+  if (!ukrComps.length) return results;
+
+  // Deduplicate by ukrTourneyId
+  const seen = new Set();
+  const unique = ukrComps.filter(c => {
+    if (seen.has(c.ukrTourneyId)) return false;
+    seen.add(c.ukrTourneyId);
+    return true;
+  });
+
+  // Process tournaments in parallel batches of 5
+  const BATCH = 5;
+  for (let i = 0; i < unique.length; i += BATCH) {
+    const batch = unique.slice(i, i + BATCH);
+
+    const batchResults = await Promise.all(batch.map(async (comp) => {
+      try {
+        console.log(`  → ${comp.name}`);
+
+        // Step 2: Get FTL tournament GUID
+        const ftlInfo = await getFTLUrlFromUKR(comp.ukrTourneyId);
+        console.log(`    FTL info for ${comp.ukrTourneyId}: ${ftlInfo ? ftlInfo.ftlTournamentGUID : 'NOT FOUND'}`);
+        if (!ftlInfo) {
+          console.log(`    No FTL link found — skipping`);
+          // Still save the competition from UKRatings data (rank/field_size)
+          return { ...comp, poolBouts: [], deBouts: [] };
+        }
+
+        // Step 3: Get event GUIDs from FTL schedule
+        const eventGUIDs = await getFTLEventGUIDs(ftlInfo.ftlTournamentGUID);
+        results.eventsChecked += eventGUIDs.length;
+        console.log(`    FTL event GUIDs found: ${eventGUIDs.length}`);
+
+        if (!eventGUIDs.length) {
+          console.log(`    No events found on FTL schedule`);
+          return { ...comp, poolBouts: [], deBouts: [], ftlTournamentGUID: ftlInfo.ftlTournamentGUID };
+        }
+
+        // Step 4: Find fencer in one of the events
+        let matchedEvent = null;
+        for (const eventGUID of eventGUIDs) {
+          const match = await searchFTLEventForFencer(eventGUID, surname, firstName);
+          if (match) {
+            matchedEvent = { eventGUID, ...match };
+            break;
+          }
+        }
+
+        if (!matchedEvent) {
+          console.log(`    Fencer not found in any of ${eventGUIDs.length} FTL events`);
+          return { ...comp, poolBouts: [], deBouts: [], ftlTournamentGUID: ftlInfo.ftlTournamentGUID };
+        }
+
+        const { eventGUID, poolGUIDs = [], tableauGUIDs = [], place, fieldSize, eventName } = matchedEvent;
+
+        // Step 5: Scrape pool + tableau bouts IN PARALLEL
+        const [poolBoutsArrays, deBoutsArrays] = await Promise.all([
+          Promise.all((poolGUIDs || []).map(g => scrapePool(eventGUID, g, surname).catch(() => []))),
+          Promise.all((tableauGUIDs || []).map(g => scrapeTableau(eventGUID, g, surname).catch(() => []))),
+        ]);
+
+        const poolBouts = poolBoutsArrays.flat();
+        const deBouts   = deBoutsArrays.flat();
+
+        console.log(`    ✓ ${poolBouts.length} pool + ${deBouts.length} DE bouts`);
+
+        return {
+          ...comp,
+          ftlEventGUID:      eventGUID,
+          ftlTournamentGUID: ftlInfo.ftlTournamentGUID,
+          eventName:         eventName || comp.eventName,
+          rank:              place    || comp.rank,
+          fieldSize:         fieldSize || comp.fieldSize,
+          poolBouts,
+          deBouts,
+        };
+      } catch (err) {
+        console.warn(`    Error processing ${comp.name}: ${err.message}`);
+        results.errors.push(`${comp.name}: ${err.message}`);
+        return { ...comp, poolBouts: [], deBouts: [] };
+      }
+    }));
+
+    results.competitions.push(...batchResults);
+  }
+
+  return results;
+}
+
 module.exports = { scrapeFencer, saveScrapedData, scrapeFromFTLUrl, saveManualTournamentData };
