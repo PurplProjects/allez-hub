@@ -131,6 +131,7 @@ async function getFTLEventGUIDs(ftlTournamentGUID) {
     browser = await puppeteer.launch({
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu'],
       headless: 'new',
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
     });
     const page = await browser.newPage();
     await page.setUserAgent(HEADERS_HTML['User-Agent']);
@@ -195,6 +196,7 @@ async function scrapePool(eventGUID, poolGUID, surname) {
     browser = await puppeteer.launch({
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu'],
       headless: 'new',
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
     });
     const page = await browser.newPage();
     await page.setUserAgent(HEADERS_HTML['User-Agent']);
@@ -273,6 +275,7 @@ async function scrapeTableau(eventGUID, tableauGUID, surname) {
     browser = await puppeteer.launch({
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu'],
       headless: 'new',
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
     });
     const page = await browser.newPage();
     await page.setUserAgent(HEADERS_HTML['User-Agent']);
