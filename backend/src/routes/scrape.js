@@ -4,6 +4,37 @@ const auth     = require('../middleware/auth');
 const supabase = require('../db/supabase');
 const { scrapeFencer, saveScrapedData, scrapeFromFTLUrl, saveManualTournamentData } = require('../services/scraper');
 
+
+// GET /api/scrape/debug/chromium — check what's available
+router.get('/debug/chromium', async (req, res) => {
+  const fs = require('fs');
+  const { execSync } = require('child_process');
+  
+  const candidates = [
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/google-chrome',
+    '/usr/bin/google-chrome-stable',
+    '/nix/var/nix/profiles/default/bin/chromium',
+    '/run/current-system/sw/bin/chromium',
+  ];
+  
+  const found = candidates.map(p => ({ path: p, exists: (() => { try { return fs.existsSync(p); } catch { return false; } })() }));
+  
+  let whichChromium = null;
+  try { whichChromium = execSync('which chromium 2>/dev/null || which chromium-browser 2>/dev/null || which google-chrome 2>/dev/null').toString().trim(); } catch {}
+  
+  let lsUsr = null;
+  try { lsUsr = execSync('ls /usr/bin/ | grep -i chrom 2>/dev/null').toString().trim(); } catch {}
+
+  let envVars = {
+    PLAYWRIGHT_CHROMIUM_PATH: process.env.PLAYWRIGHT_CHROMIUM_PATH,
+    PUPPETEER_EXECUTABLE_PATH: process.env.PUPPETEER_EXECUTABLE_PATH,
+  };
+  
+  res.json({ candidates: found, whichChromium, lsUsr, envVars });
+});
+
 router.use(auth);
 
 // In-memory status tracker
@@ -190,36 +221,6 @@ router.get('/:id/status', async (req, res) => {
     current:    inMemory || null,
     lastSync:   dbLog   || null,
   });
-});
-
-// GET /api/scrape/debug/chromium — check what's available
-router.get('/debug/chromium', async (req, res) => {
-  const fs = require('fs');
-  const { execSync } = require('child_process');
-  
-  const candidates = [
-    '/usr/bin/chromium',
-    '/usr/bin/chromium-browser',
-    '/usr/bin/google-chrome',
-    '/usr/bin/google-chrome-stable',
-    '/nix/var/nix/profiles/default/bin/chromium',
-    '/run/current-system/sw/bin/chromium',
-  ];
-  
-  const found = candidates.map(p => ({ path: p, exists: (() => { try { return fs.existsSync(p); } catch { return false; } })() }));
-  
-  let whichChromium = null;
-  try { whichChromium = execSync('which chromium 2>/dev/null || which chromium-browser 2>/dev/null || which google-chrome 2>/dev/null').toString().trim(); } catch {}
-  
-  let lsUsr = null;
-  try { lsUsr = execSync('ls /usr/bin/ | grep -i chrom 2>/dev/null').toString().trim(); } catch {}
-
-  let envVars = {
-    PLAYWRIGHT_CHROMIUM_PATH: process.env.PLAYWRIGHT_CHROMIUM_PATH,
-    PUPPETEER_EXECUTABLE_PATH: process.env.PUPPETEER_EXECUTABLE_PATH,
-  };
-  
-  res.json({ candidates: found, whichChromium, lsUsr, envVars });
 });
 
 module.exports = router;
