@@ -123,46 +123,33 @@ async function getFTLUrlFromUKR(ukrTourneyId) {
   }
 }
 
-// Step 3: Get event GUIDs from FTL tournament schedule (Puppeteer — JS-rendered)
+// Step 3: Get event GUIDs from FTL tournament schedule (plain HTTP — GUIDs in raw HTML)
+// The schedule page embeds event GUIDs as data-href="/events/view/{GUID}" attributes
+// No Puppeteer needed — raw HTML contains all the data
 async function getFTLEventGUIDs(ftlTournamentGUID) {
-  let browser;
   try {
-    const { chromium } = require('playwright-core');
-    browser = await chromium.launch({
-      executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH ||
-                      process.env.PUPPETEER_EXECUTABLE_PATH ||
-                      '/nix/var/nix/profiles/default/bin/chromium',
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu'],
-      headless: true,
-    });
-    const context = await browser.newContext({ userAgent: HEADERS_HTML['User-Agent'] });
-    const page = await context.newPage();
-    await page.goto(
+    const res = await axios.get(
       `${FTL}/tournaments/eventSchedule/${ftlTournamentGUID}`,
-      { waitUntil: 'networkidle0', timeout: 25000 }
+      { headers: HEADERS_HTML, timeout: 15000 }
     );
-    await new Promise(r => setTimeout(r, 2000));
+    const html = res.data;
 
-    const guids = await page.evaluate(() => {
-      const links = [...document.querySelectorAll('a[href*="/events/"]')];
-      const seen  = new Set();
-      const found = [];
-      links.forEach(a => {
-        const m = a.href.match(/\/events\/(?:view|results)\/([A-F0-9]{32})/i);
-        if (m && !seen.has(m[1])) {
-          seen.add(m[1]);
-          found.push(m[1].toUpperCase());
-        }
-      });
-      return found;
+    // GUIDs appear as: data-href="/events/view/{GUID}"
+    const dataHrefMatches = [...html.matchAll(/data-href="\/events\/(?:view|results)\/([A-F0-9]{32})"/gi)];
+    // Also catch any plain href links
+    const hrefMatches     = [...html.matchAll(/href="\/events\/(?:view|results)\/([A-F0-9]{32})"/gi)];
+
+    const seen  = new Set();
+    const guids = [];
+    [...dataHrefMatches, ...hrefMatches].forEach(m => {
+      const g = m[1].toUpperCase();
+      if (!seen.has(g)) { seen.add(g); guids.push(g); }
     });
 
     return guids;
   } catch (err) {
     console.warn(`    Could not get event GUIDs for tournament ${ftlTournamentGUID}: ${err.message}`);
     return [];
-  } finally {
-    if (browser) await browser.close().catch(() => {});
   }
 }
 
@@ -381,7 +368,12 @@ async function scrapeFencer(fencer) {
   let ukrComps;
   try {
     ukrComps = await getUKRTournaments(fencer.ukr_id, fencer.ukr_weapon_id || '34');
+    console.log(`  UKRatings returned ${ukrComps.length} competitions`);
+    if (ukrComps.length > 0) {
+      console.log(`  Sample: ${ukrComps.slice(0,3).map(c => c.ukrTourneyId + ':' + c.name).join(', ')}`);
+    }
   } catch (err) {
+    console.error(`  UKRatings fetch ERROR: ${err.message}`, err.stack);
     results.errors.push(`UKRatings fetch failed: ${err.message}`);
     return results;
   }
