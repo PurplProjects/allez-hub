@@ -33,9 +33,50 @@ const HEADERS_JSON = {
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// Cookie jar for UKRatings — handles session cookies across redirects
+const https    = require('https');
+const http     = require('http');
+const { CookieJar } = (() => { try { return require('tough-cookie'); } catch { return { CookieJar: null }; } })();
+
 async function fetchHTML(url) {
-  const res = await axios.get(url, { headers: HEADERS_HTML, timeout: 20000 });
-  return res.data;
+  // Use axios with manual redirect handling to preserve cookies
+  const jar = {};
+  let currentUrl = url;
+  
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const res = await axios.get(currentUrl, {
+      headers: {
+        ...HEADERS_HTML,
+        'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-GB,en;q=0.5',
+        'Upgrade-Insecure-Requests': '1',
+        'Cookie':          Object.entries(jar).map(([k,v]) => `${k}=${v}`).join('; '),
+      },
+      timeout:      20000,
+      maxRedirects: 0,           // handle redirects manually
+      validateStatus: s => s < 400,
+    });
+
+    // Collect any Set-Cookie headers
+    const setCookie = res.headers['set-cookie'];
+    if (setCookie) {
+      setCookie.forEach(c => {
+        const [pair] = c.split(';');
+        const [k, v] = pair.split('=');
+        if (k) jar[k.trim()] = (v || '').trim();
+      });
+    }
+
+    // If not a redirect, return the body
+    if (res.status < 300 || res.status >= 400) return res.data;
+
+    // Follow redirect
+    const location = res.headers['location'];
+    if (!location) return res.data;
+    currentUrl = location.startsWith('http') ? location : new URL(location, currentUrl).href;
+  }
+
+  throw new Error(`Too many redirects for ${url}`);
 }
 async function fetchJSON(url) {
   const res = await axios.get(url, { headers: HEADERS_JSON, timeout: 15000 });
