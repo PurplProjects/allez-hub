@@ -1,9 +1,9 @@
 import { useState, useMemo } from 'react';
-import { theme } from '../../../lib/theme';
+import { useTheme } from '../../../hooks/useTheme';
 
-const T = theme;
 
 export default function BoutHistoryTab({ bouts = [], competitions = [] }) {
+  const { theme: T } = useTheme();
   const [year,   setYear]   = useState('all');
   const [compId, setCompId] = useState('all');
   const [type,   setType]   = useState('all');
