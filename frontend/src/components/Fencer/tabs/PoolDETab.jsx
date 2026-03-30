@@ -1,6 +1,5 @@
 // PoolDETab.jsx
-import { theme } from '../../../lib/theme';
-const T = theme;
+import { useTheme } from '../../../hooks/useTheme';
 
 export function PoolDETab({ stats }) {
   if (!stats) return null;
