@@ -52,9 +52,9 @@ export default function LoginPage() {
     if (otp.length < 6) { setError('Please enter the full 6-digit code'); return; }
     setLoading(true); setError('');
     try {
-      const user = await verifyOTP(email, otp);
-      login(user);
-      navigate(user.role === 'coach' ? '/coach' : '/dashboard');
+const data = await verifyOTP(email, otp);
+login(data.token, data.user, data.fencer);
+navigate(data.user.role === 'coach' ? '/coach' : '/dashboard');
     } catch (err) {
       setError(err.message || 'Invalid code. Please try again.');
     } finally {
