@@ -1,8 +1,9 @@
-import { theme, ROUTINE_STEPS } from '../../../lib/theme';
+import { ROUTINE_STEPS } from '../../../lib/theme';
+import { useTheme } from '../../../hooks/useTheme';
 
-const T = theme;
 
 export default function RoutineTab({ cuephrase }) {
+  const { theme: T } = useTheme();
   const cue = cuephrase || 'My footwork';
 
   return (
