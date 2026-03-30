@@ -1,8 +1,7 @@
 import { useState } from 'react';
-import { theme } from '../../lib/theme';
+import { useTheme } from '../../hooks/useTheme';
 import { useAuth } from '../../hooks/useAuth';
 
-const T = theme;
 
 const s = {
   wrap:    { padding: 14, display: 'flex', flexDirection: 'column', gap: 12 },
@@ -18,6 +17,7 @@ const s = {
 };
 
 export default function AddTournamentTab() {
+  const { theme: T } = useTheme();
   const { user } = useAuth();
   const isCoach  = user?.role === 'coach';
 
