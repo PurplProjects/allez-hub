@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../hooks/useAuth';
 import { getMyProfile, getMyBouts, triggerScrape, getScrapeStatus } from '../../lib/api';
-import { theme } from '../../lib/theme';
+import { useTheme } from '../../hooks/useTheme';
 import TopBar from '../Shared/TopBar';
 import SectionTabs from '../Shared/SectionTabs';
 import OverviewTab    from './tabs/OverviewTab';
@@ -23,6 +23,7 @@ const TABS = [
 ];
 
 export default function FencerDashboard() {
+  const { theme: T } = useTheme();
   const { user, fencer: authFencer } = useAuth();
   const [activeTab, setActiveTab] = useState('overview');
   const [profile,   setProfile]   = useState(null);
@@ -71,7 +72,7 @@ export default function FencerDashboard() {
   const { fencer, stats, competitions } = profile || {};
 
   return (
-    <div style={{ display:'flex', flexDirection:'column', minHeight:'100vh', background:theme.black }}>
+    <div style={{ display:'flex', flexDirection:'column', minHeight:'100vh', background:T.black }}>
       <TopBar />
       <SectionTabs tabs={TABS} active={activeTab} onChange={setActiveTab} />
 
@@ -83,9 +84,9 @@ export default function FencerDashboard() {
           style={{
             fontSize: 11, padding: '4px 10px',
             background: 'transparent',
-            border: `0.5px solid ${theme.surface3}`,
-            borderRadius: theme.borderRadiusSm,
-            color: syncing ? theme.textTertiary : theme.primary,
+            border: `0.5px solid ${T.surface3}`,
+            borderRadius: T.borderRadiusSm,
+            color: syncing ? T.textTertiary : T.primary,
             cursor: syncing ? 'default' : 'pointer',
           }}
         >
@@ -124,16 +125,16 @@ export default function FencerDashboard() {
 function LoadingScreen() {
   return (
     <div style={{
-      minHeight: '100vh', background: theme.black,
+      minHeight: '100vh', background: T.black,
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       flexDirection: 'column', gap: 16,
     }}>
       <div style={{
-        width: 40, height: 40, background: theme.primary,
+        width: 40, height: 40, background: T.primary,
         borderRadius: 10, display: 'flex', alignItems: 'center',
         justifyContent: 'center', fontSize: 18, color: 'white', fontWeight: 500,
       }}>AF</div>
-      <div style={{ fontSize: 14, color: theme.textTertiary }}>Loading your dashboard…</div>
+      <div style={{ fontSize: 14, color: T.textTertiary }}>Loading your dashboard…</div>
     </div>
   );
 }
