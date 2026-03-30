@@ -2,28 +2,29 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { sendOTP, verifyOTP } from '../../lib/api';
 import { useAuth } from '../../hooks/useAuth';
-import { theme } from '../../lib/theme';
+import { useTheme } from '../../hooks/useTheme';
 
-const s = {
-  wrap:    { minHeight:'100vh', background:theme.black, display:'flex', alignItems:'center', justifyContent:'center', padding:'20px' },
-  card:    { background:theme.surface1, border:`0.5px solid ${theme.surface3}`, borderRadius:theme.borderRadius, padding:'32px 28px', width:'100%', maxWidth:'380px' },
-  logo:    { width:52, height:52, background:theme.primary, borderRadius:'12px', display:'flex', alignItems:'center', justifyContent:'center', fontSize:22, fontWeight:500, color:'white', margin:'0 auto 20px' },
-  title:   { fontSize:20, fontWeight:500, color:theme.textPrimary, textAlign:'center' },
-  sub:     { fontSize:13, color:theme.textTertiary, textAlign:'center', marginTop:6, marginBottom:24, lineHeight:1.6 },
-  label:   { display:'block', fontSize:12, color:theme.textSecondary, marginBottom:6 },
-  input:   { width:'100%', padding:'11px 14px', background:theme.surface2, border:`0.5px solid ${theme.surface3}`, borderRadius:theme.borderRadiusSm, color:theme.textPrimary, fontSize:14, outline:'none', marginBottom:14, boxSizing:'border-box' },
-  btn:     { width:'100%', padding:'12px', background:theme.primary, border:'none', borderRadius:theme.borderRadiusSm, color:'white', fontSize:14, fontWeight:500, cursor:'pointer' },
-  btnDisabled: { opacity:0.6, cursor:'not-allowed' },
-  error:   { background:'#450a0a', color:'#fca5a5', borderRadius:theme.borderRadiusSm, padding:'10px 12px', fontSize:13, marginBottom:12 },
-  otpWrap: { display:'flex', gap:8, justifyContent:'center', marginBottom:16 },
-  otpBox:  { width:46, height:56, background:theme.surface2, border:`0.5px solid ${theme.surface3}`, borderRadius:theme.borderRadiusSm, fontSize:26, fontWeight:500, color:theme.primary, textAlign:'center', outline:'none' },
-  resend:  { textAlign:'center', fontSize:12, color:theme.textTertiary, marginTop:12 },
-  resendLink: { color:theme.primary, cursor:'pointer', marginLeft:4 },
-  note:    { textAlign:'center', fontSize:11, color:theme.textTertiary, marginTop:16, lineHeight:1.5 },
-  back:    { textAlign:'center', fontSize:12, color:theme.primary, cursor:'pointer', marginTop:10, display:'block' },
-};
 
 export default function LoginPage() {
+  const { theme: T } = useTheme();
+const s = {
+  wrap:    { minHeight:'100vh', background:T.black, display:'flex', alignItems:'center', justifyContent:'center', padding:'20px' },
+  card:    { background:T.surface1, border:`0.5px solid ${T.surface3}`, borderRadius:T.borderRadius, padding:'32px 28px', width:'100%', maxWidth:'380px' },
+  logo:    { width:52, height:52, background:T.primary, borderRadius:'12px', display:'flex', alignItems:'center', justifyContent:'center', fontSize:22, fontWeight:500, color:'white', margin:'0 auto 20px' },
+  title:   { fontSize:20, fontWeight:500, color:T.textPrimary, textAlign:'center' },
+  sub:     { fontSize:13, color:T.textTertiary, textAlign:'center', marginTop:6, marginBottom:24, lineHeight:1.6 },
+  label:   { display:'block', fontSize:12, color:T.textSecondary, marginBottom:6 },
+  input:   { width:'100%', padding:'11px 14px', background:T.surface2, border:`0.5px solid ${T.surface3}`, borderRadius:T.borderRadiusSm, color:T.textPrimary, fontSize:14, outline:'none', marginBottom:14, boxSizing:'border-box' },
+  btn:     { width:'100%', padding:'12px', background:T.primary, border:'none', borderRadius:T.borderRadiusSm, color:'white', fontSize:14, fontWeight:500, cursor:'pointer' },
+  btnDisabled: { opacity:0.6, cursor:'not-allowed' },
+  error:   { background:'#450a0a', color:'#fca5a5', borderRadius:T.borderRadiusSm, padding:'10px 12px', fontSize:13, marginBottom:12 },
+  otpWrap: { display:'flex', gap:8, justifyContent:'center', marginBottom:16 },
+  otpBox:  { width:46, height:56, background:T.surface2, border:`0.5px solid ${T.surface3}`, borderRadius:T.borderRadiusSm, fontSize:26, fontWeight:500, color:T.primary, textAlign:'center', outline:'none' },
+  resend:  { textAlign:'center', fontSize:12, color:T.textTertiary, marginTop:12 },
+  resendLink: { color:T.primary, cursor:'pointer', marginLeft:4 },
+  note:    { textAlign:'center', fontSize:11, color:T.textTertiary, marginTop:16, lineHeight:1.5 },
+  back:    { textAlign:'center', fontSize:12, color:T.primary, cursor:'pointer', marginTop:10, display:'block' },
+};
   const [step,    setStep]    = useState('email');  // 'email' | 'otp'
   const [email,   setEmail]   = useState('');
   const [code,    setCode]    = useState(['','','','','','']);
@@ -91,8 +92,8 @@ export default function LoginPage() {
     <div style={s.wrap}>
       {step === 'email' ? (
         <div style={s.card}>
-          <div style={s.logo}>{theme.clubShort}</div>
-          <div style={s.title}>{theme.clubName}</div>
+          <div style={s.logo}>{T.clubShort}</div>
+          <div style={s.title}>{T.clubName}</div>
           <div style={s.sub}>Performance Hub — enter your email to sign in.<br />No password needed.</div>
           {error && <div style={s.error}>{error}</div>}
           <form onSubmit={handleSendOTP}>
@@ -113,9 +114,9 @@ export default function LoginPage() {
         </div>
       ) : (
         <div style={s.card}>
-          <div style={s.logo}>{theme.clubShort}</div>
+          <div style={s.logo}>{T.clubShort}</div>
           <div style={s.title}>Check your email</div>
-          <div style={s.sub}>We sent a 6-digit code to<br /><strong style={{ color:theme.textPrimary }}>{email}</strong></div>
+          <div style={s.sub}>We sent a 6-digit code to<br /><strong style={{ color:T.textPrimary }}>{email}</strong></div>
           {error && <div style={s.error}>{error}</div>}
           <form onSubmit={handleVerify}>
             <div style={s.otpWrap} onPaste={handlePaste}>
@@ -123,7 +124,7 @@ export default function LoginPage() {
                 <input
                   key={i}
                   id={`otp-${i}`}
-                  style={{ ...s.otpBox, borderColor: digit ? theme.primary : theme.surface3 }}
+                  style={{ ...s.otpBox, borderColor: digit ? T.primary : T.surface3 }}
                   type="text"
                   inputMode="numeric"
                   maxLength={1}
