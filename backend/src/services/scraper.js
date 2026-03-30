@@ -590,4 +590,37 @@ async function scrapeFTLTableau(eventGUID, tableauGUID, surname) {
   return bouts;
 }
 
-module.exports = { syncFencer, scrapeFromFTLUrl };
+// ── Legacy API shims for scrape.js route ─────────────────────────────────────
+
+// Route calls scrapeFromFTLUrl(ftlUrl, { coachMode, allFencers, fencerId, fencerName })
+// and expects back an object keyed by fencerId: { [fencerId]: { competitions, fencer } }
+async function scrapeFromFTLUrlLegacy(ftlUrl, opts = {}) {
+  const { coachMode = false, fencerId } = opts;
+  const innerResults = await scrapeFromFTLUrl(ftlUrl, fencerId, coachMode);
+
+  // Build the shape the route expects
+  const { data: allFencers } = coachMode
+    ? await supabase.from('fencers').select('*')
+    : await supabase.from('fencers').select('*').eq('id', fencerId);
+
+  const shaped = {};
+  (allFencers || []).forEach(f => {
+    const fComp = innerResults.competitions.filter(c => c.fencerId === f.id || !c.fencerId);
+    if (fComp.length) shaped[f.id] = { fencer: f, competitions: fComp };
+  });
+  return shaped;
+}
+
+// Route calls saveManualTournamentData(scrapeResults) after scrapeFromFTLUrl
+// New scraper already saves inside scrapeFromFTLUrl, so this is a no-op
+async function saveManualTournamentData(scrapeResults) {
+  return 0;
+}
+
+module.exports = {
+  syncFencer,
+  scrapeFencer,
+  saveScrapedData,
+  scrapeFromFTLUrl: scrapeFromFTLUrlLegacy,
+  saveManualTournamentData,
+};
