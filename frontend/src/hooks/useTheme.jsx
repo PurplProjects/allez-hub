@@ -1,12 +1,12 @@
 import { createContext, useContext, useState, useEffect } from 'react';
 import { lightTheme, darkTheme } from '../lib/theme';
 
-const ThemeContext = createContext(darkTheme);
+const ThemeContext = createContext(lightTheme);
 
 export function ThemeProvider({ children }) {
   const [theme, setTheme] = useState(() => {
     try {
-      return localStorage.getItem('allez-theme') === 'light' ? lightTheme : darkTheme;
+      return localStorage.getItem('allez-theme') === 'dark' ? darkTheme : lightTheme;
     } catch { return darkTheme; }
   });
 
