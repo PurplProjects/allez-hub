@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './hooks/useAuth';
+import { ThemeProvider } from './hooks/useTheme';
 import LoginPage       from './components/Auth/LoginPage';
 import FencerDashboard from './components/Fencer/FencerDashboard';
 import CoachDashboard  from './components/Coach/CoachDashboard';
@@ -22,19 +23,21 @@ function RootRedirect() {
 export default function App() {
   return (
     <AuthProvider>
-      <BrowserRouter>
-        <Routes>
-          <Route path="/"          element={<RootRedirect />} />
-          <Route path="/login"     element={<LoginPage />} />
-          <Route path="/dashboard" element={
-            <ProtectedRoute><FencerDashboard /></ProtectedRoute>
-          } />
-          <Route path="/coach" element={
-            <ProtectedRoute requireCoach><CoachDashboard /></ProtectedRoute>
-          } />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </BrowserRouter>
+      <ThemeProvider>
+        <BrowserRouter>
+          <Routes>
+            <Route path="/"          element={<RootRedirect />} />
+            <Route path="/login"     element={<LoginPage />} />
+            <Route path="/dashboard" element={
+              <ProtectedRoute><FencerDashboard /></ProtectedRoute>
+            } />
+            <Route path="/coach" element={
+              <ProtectedRoute requireCoach><CoachDashboard /></ProtectedRoute>
+            } />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </BrowserRouter>
+      </ThemeProvider>
     </AuthProvider>
   );
 }
