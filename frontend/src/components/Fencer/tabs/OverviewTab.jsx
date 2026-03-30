@@ -83,8 +83,10 @@ export default function OverviewTab({ fencer, stats, competitions }) {
   const thisWP  = byYear[thisYr]?.total ? Math.round(byYear[thisYr].won/byYear[thisYr].total*100) : null;
   const lastWP  = byYear[lastYr]?.total ? Math.round(byYear[lastYr].won/byYear[lastYr].total*100) : null;
   const delta   = thisWP !== null && lastWP !== null ? thisWP - lastWP : null;
-  const thisEvt = byYear[thisYr]?.events || 0;
-  const thisMed = byYear[thisYr]?.medals || 0;
+  // Season events/medals come from competitions, not byYear (byYear only tracks bout counts)
+  const thisYrComps = (competitions||[]).filter(c => c.date?.startsWith(thisYr));
+  const thisEvt = thisYrComps.length;
+  const thisMed = thisYrComps.filter(c => c.rank && c.rank <= 3).length;
 
   // Net touches per year for sparkline
   const netByYear = years.map(y => {
@@ -289,7 +291,7 @@ export default function OverviewTab({ fencer, stats, competitions }) {
                 const wp   = d.total   ? Math.round(d.won/d.total*100)       : 0;
                 const ppct = d.pouleT  ? Math.round(d.pouleW/d.pouleT*100)   : 0;
                 const dpct = d.deT     ? Math.round(d.deW/d.deT*100)         : 0;
-                const net  = (d.touchesFor||0)-(d.touchesAgainst||0);
+                const net  = (d.ts||0)-(d.tr||0);
                 const isThis = yr===thisYr;
                 return (
                   <tr key={yr} style={{
@@ -305,8 +307,8 @@ export default function OverviewTab({ fencer, stats, competitions }) {
                     <td style={{ padding:'10px 8px', textAlign:'center', color:T.info, fontWeight:600 }}>{ppct}%</td>
                     <td style={{ padding:'10px 8px', textAlign:'center', color:T.textSecondary }}>{d.deW||0}/{d.deT||0}</td>
                     <td style={{ padding:'10px 8px', textAlign:'center', color:T.primary, fontWeight:600 }}>{dpct}%</td>
-                    <td style={{ padding:'10px 8px', textAlign:'center', color:T.success, fontWeight:500 }}>{d.touchesFor||0}</td>
-                    <td style={{ padding:'10px 8px', textAlign:'center', color:T.danger, fontWeight:500 }}>{d.touchesAgainst||0}</td>
+                    <td style={{ padding:'10px 8px', textAlign:'center', color:T.success, fontWeight:500 }}>{d.ts||0}</td>
+                    <td style={{ padding:'10px 8px', textAlign:'center', color:T.danger, fontWeight:500 }}>{d.tr||0}</td>
                     <td style={{ padding:'10px 8px', textAlign:'center', fontWeight:700, color:net>=0?T.success:T.danger }}>
                       {net>0?`+${net}`:net}
                     </td>
