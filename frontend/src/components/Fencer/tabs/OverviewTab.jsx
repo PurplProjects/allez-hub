@@ -1,136 +1,74 @@
 import { useState, useEffect } from 'react';
-import { theme } from '../../../lib/theme';
-import { Bar, Line } from 'react-chartjs-2';
+import { useTheme } from '../../../hooks/useTheme';
+import { Line } from 'react-chartjs-2';
 import {
   Chart as ChartJS, CategoryScale, LinearScale,
-  BarElement, LineElement, PointElement, Tooltip, Filler,
+  LineElement, PointElement, Tooltip, Filler,
 } from 'chart.js';
-ChartJS.register(CategoryScale, LinearScale, BarElement, LineElement, PointElement, Tooltip, Filler);
+ChartJS.register(CategoryScale, LinearScale, LineElement, PointElement, Tooltip, Filler);
 
-const T = theme;
-
-// ── SVG Icons ─────────────────────────────────────────────────
-const Icon = ({ d, size = 14, color = T.textTertiary, fill = 'none', strokeWidth = 1.5 }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill={fill} stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <path d={d} />
-  </svg>
-);
-const Icons = {
-  sword:    'M14.5 17.5L3 6V3h3l11.5 11.5M14.5 17.5l-1.5 1.5-1.5-1.5L13 16M14.5 17.5L16 19l3 3M14 5l5-5 5 5-5 5M12 7l-5 5',
-  trophy:   'M6 9H4.5a2.5 2.5 0 0 1 0-5H6M18 9h1.5a2.5 2.5 0 0 0 0-5H18M6 9v7M18 9v7M6 16a6 6 0 0 0 12 0M12 20v2M9 22h6',
-  target:   'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 18a6 6 0 1 0 0-12 6 6 0 0 0 0 12zM12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4z',
-  trend:    'M22 7l-8.5 8.5-5-5L2 17M22 7h-5M22 7v5',
-  star:     'M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z',
-  shield:   'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z',
-  bolt:     'M13 2L3 14h9l-1 8 10-12h-9l1-8z',
-  chart:    'M18 20V10M12 20V4M6 20v-6',
-  clock:    'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 6v6l4 2',
-  warning:  'M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01',
-  check:    'M20 6L9 17l-5-5',
-  fire:     'M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 3z',
-  users:    'M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75',
-  brain:    'M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96-.46 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.44-1.14A2.5 2.5 0 0 1 9.5 2M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96-.46 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.44-1.14A2.5 2.5 0 0 0 14.5 2z',
-  medal:    'M12 15a7 7 0 1 0 0-14 7 7 0 0 0 0 14z M8.21 13.89L7 23l5-3 5 3-1.21-9.12',
-  location: 'M12 22s-8-4.5-8-11.8A8 8 0 0 1 12 2a8 8 0 0 1 8 8.2c0 7.3-8 11.8-8 11.8zM12 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
-};
-
-// ── AI inference engine ───────────────────────────────────────
-function generateInsights(stats, competitions, fencer) {
-  const insights = [];
-  if (!stats?.career) return insights;
-
-  const c      = stats.career;
+// ── AI insight engine ─────────────────────────────────────────
+function generateInsights(stats) {
+  if (!stats?.career) return [];
+  const c = stats.career;
   const byYear = stats.byYear || {};
   const years  = Object.keys(byYear).sort();
   const thisYr = new Date().getFullYear().toString();
   const lastYr = (new Date().getFullYear() - 1).toString();
+  const insights = [];
 
-  const thisYearData = byYear[thisYr];
-  const lastYearData = byYear[lastYr];
-
-  // ── Momentum ──────────────────────────────────────────────
-  if (thisYearData && lastYearData && thisYearData.total >= 3) {
-    const thisWP = Math.round(thisYearData.won / thisYearData.total * 100);
-    const lastWP = Math.round(lastYearData.won / lastYearData.total * 100);
-    const delta  = thisWP - lastWP;
-    if (delta >= 15)
-      insights.push({ type: 'positive', icon: 'fire',  title: 'On fire this season', body: `Win rate up ${delta}pp year-on-year — best form of career.` });
-    else if (delta >= 8)
-      insights.push({ type: 'positive', icon: 'trend', title: 'Upward trajectory',   body: `${delta}pp improvement vs last year. Consistent growth.` });
-    else if (delta <= -10)
-      insights.push({ type: 'warning',  icon: 'warning', title: 'Form dip this season', body: `Win rate down ${Math.abs(delta)}pp vs last year. Worth reviewing.` });
+  // Season momentum
+  const thisWP = byYear[thisYr]?.total ? Math.round(byYear[thisYr].won / byYear[thisYr].total * 100) : null;
+  const lastWP = byYear[lastYr]?.total ? Math.round(byYear[lastYr].won / byYear[lastYr].total * 100) : null;
+  if (thisWP !== null && lastWP !== null) {
+    const delta = thisWP - lastWP;
+    if (delta >= 15) insights.push({ emoji:'🔥', label:'On fire', title:`+${delta}pp year-on-year`, body:'Best form of career.', type:'positive' });
+    else if (delta >= 6) insights.push({ emoji:'📈', label:'Improving', title:`+${delta}pp vs ${lastYr}`, body:'Consistent upward trajectory.', type:'positive' });
+    else if (delta <= -8) insights.push({ emoji:'⚠️', label:'Form dip', title:`${delta}pp vs ${lastYr}`, body:'Worth reviewing in sessions.', type:'warning' });
   }
 
-  // ── Poule vs DE gap ───────────────────────────────────────
-  const gap = c.pouleWinPct - c.deWinPct;
-  if (gap >= 20)
-    insights.push({ type: 'warning', icon: 'target', title: 'DE is the key battleground', body: `${gap}pp drop from pools to DE. Under pressure your win rate falls sharply — composure and preparation in DE scenarios is the biggest lever.` });
-  else if (gap >= 10)
-    insights.push({ type: 'neutral', icon: 'chart', title: 'Poule–DE gap closing', body: `${c.pouleWinPct}% in pools vs ${c.deWinPct}% in DE. A manageable gap — DE composure drills would close this further.` });
-  else if (gap <= 3 && c.deWinPct >= 50)
-    insights.push({ type: 'positive', icon: 'shield', title: 'DE performer', body: `Barely any drop from pools to DE — ${c.deWinPct}% DE win rate shows real composure under pressure.` });
+  // Poule–DE gap
+  const gap = (c.pouleWinPct || 0) - (c.deWinPct || 0);
+  if (gap >= 20) insights.push({ emoji:'⚡', label:'DE focus', title:`${gap}pp pool–DE gap`, body:'DE composure is the key lever.', type:'warning' });
+  else if (gap >= 10) insights.push({ emoji:'⚡', label:'DE gap', title:`${gap}pp pool–DE gap`, body:'Closing — keep the drill work up.', type:'neutral' });
+  else if (gap <= 3 && (c.deWinPct || 0) >= 50) insights.push({ emoji:'🛡️', label:'DE performer', title:`${c.deWinPct}% DE win rate`, body:'Real composure under pressure.', type:'positive' });
 
-  // ── Rival gap ─────────────────────────────────────────────
-  const repGap = (stats.newOppWinPct || 0) - (stats.repeatOppWinPct || 0);
-  if (repGap >= 20)
-    insights.push({ type: 'warning', icon: 'users', title: 'Circuit rivals are the challenge', body: `${stats.newOppWinPct}% vs new opponents but only ${stats.repeatOppWinPct}% vs repeat rivals. Tactical variety and opponent-specific prep needed.` });
-  else if (repGap >= 10)
-    insights.push({ type: 'neutral', icon: 'users', title: 'Slight repeat-rival gap', body: `${repGap}pp drop vs familiar opponents. Rivals are adapting — time to add unpredictability.` });
-
-  // ── Net touches trend ─────────────────────────────────────
-  if (c.avgNet >= 2)
-    insights.push({ type: 'positive', icon: 'bolt', title: 'Dominant touch margin', body: `Averaging +${c.avgNet} touches per bout — controlling tempo and forcing the pace.` });
-  else if (c.avgNet < 0)
-    insights.push({ type: 'warning', icon: 'chart', title: 'Touch deficit', body: `Averaging ${c.avgNet} touches per bout. Scoring efficiency needs attention.` });
-
-  // ── Season trajectory across years ───────────────────────
+  // Multi-year growth
   if (years.length >= 3) {
-    const recentWPs = years.slice(-3).map(y =>
-      byYear[y]?.total ? Math.round(byYear[y].won / byYear[y].total * 100) : 0
-    );
-    const allRising = recentWPs.every((v, i) => i === 0 || v >= recentWPs[i - 1] - 3);
-    if (allRising && recentWPs[recentWPs.length - 1] > recentWPs[0] + 5)
-      insights.push({ type: 'positive', icon: 'trend', title: 'Multi-year growth', body: `Win rate has grown every season for ${years.slice(-3).join(', ')}. Sustained development trajectory.` });
+    const wps = years.slice(-3).map(y => byYear[y]?.total ? Math.round(byYear[y].won/byYear[y].total*100) : 0);
+    if (wps.every((v,i) => i === 0 || v >= wps[i-1]-3) && wps[wps.length-1] > wps[0]+5)
+      insights.push({ emoji:'🚀', label:'Multi-year growth', title:`Improving every season`, body:`${years.slice(-3).join(', ')}: sustained development.`, type:'positive' });
   }
 
-  // ── Medals / top 8 ───────────────────────────────────────
-  if (c.medals >= 3)
-    insights.push({ type: 'positive', icon: 'trophy', title: `${c.medals} career medals`, body: `Consistently reaching podium positions. ${c.top8} top-8 finishes across ${c.events} events.` });
-  else if (c.top8 >= 3 && c.medals === 0)
-    insights.push({ type: 'neutral', icon: 'target', title: 'Consistently close to the podium', body: `${c.top8} top-8 finishes but no medals yet. The final hurdle is the DE semi-final.` });
+  // Medals
+  if ((c.medals || 0) >= 3) insights.push({ emoji:'🥇', label:'Podium record', title:`${c.medals} career medals`, body:`${c.top8} top-8s across ${c.events} events.`, type:'positive' });
+  else if ((c.top8 || 0) >= 3 && (c.medals || 0) === 0) insights.push({ emoji:'🎯', label:'Near misses', title:`${c.top8} top-8 finishes`, body:'The semi-final DE is the next barrier.', type:'neutral' });
 
-  // ── Return top 3 most impactful ───────────────────────────
-  const order = { positive: 0, warning: 1, neutral: 2 };
-  return insights.sort((a, b) => order[a.type] - order[b.type]).slice(0, 3);
+  const order = { positive:0, neutral:1, warning:2 };
+  return insights.sort((a,b) => order[a.type]-order[b.type]).slice(0,3);
 }
 
-// ── Recent form strip ─────────────────────────────────────────
-function recentFormBouts(stats) {
-  // Pull from byYear — we don't have individual bout dates here, 
-  // so we reconstruct a rough form indicator from year stats
+// ── Year row emoji ────────────────────────────────────────────
+function yearEmoji(year, byYear) {
   const thisYr = new Date().getFullYear().toString();
-  const d = stats?.byYear?.[thisYr];
-  if (!d) return [];
-  const totalBouts = d.total || 0;
-  const wonBouts   = d.won   || 0;
-  const lostBouts  = totalBouts - wonBouts;
-  // Alternate won/lost roughly
-  const form = [];
-  let w = wonBouts, l = lostBouts;
-  while (form.length < Math.min(10, totalBouts)) {
-    if (w > l) { form.push('W'); w--; }
-    else if (l > 0) { form.push('L'); l--; }
-    else { form.push('W'); w--; }
-  }
-  return form;
+  if (year === thisYr) return '🚀';
+  const years = Object.keys(byYear).sort();
+  const idx   = years.indexOf(year);
+  if (idx <= 0) return '📊';
+  const prevWP = byYear[years[idx-1]]?.total ? byYear[years[idx-1]].won/byYear[years[idx-1]].total : 0;
+  const thisWP = byYear[year]?.total ? byYear[year].won/byYear[year].total : 0;
+  if (thisWP - prevWP > 0.05) return '📈';
+  if (thisWP - prevWP < -0.05) return '📉';
+  return '⬆️';
 }
 
 export default function OverviewTab({ fencer, stats, competitions }) {
+  const { theme: T } = useTheme();
   const [animIn, setAnimIn] = useState(false);
-  useEffect(() => { setTimeout(() => setAnimIn(true), 50); }, []);
+  useEffect(() => { const t = setTimeout(() => setAnimIn(true), 50); return () => clearTimeout(t); }, []);
 
   if (!fencer || !stats) return (
-    <div style={{ padding: 40, textAlign: 'center', color: T.textTertiary, fontSize: 13 }}>
+    <div style={{ padding:40, textAlign:'center', color:T.textTertiary, fontSize:13 }}>
       No data yet — trigger a sync to load results.
     </div>
   );
@@ -139,313 +77,288 @@ export default function OverviewTab({ fencer, stats, competitions }) {
   const byYear = stats.byYear || {};
   const years  = Object.keys(byYear).sort();
   const thisYr = new Date().getFullYear().toString();
-  const insights = generateInsights(stats, competitions, fencer);
-  const recentForm = recentFormBouts(stats);
+  const lastYr = (new Date().getFullYear()-1).toString();
+  const insights = generateInsights(stats);
 
-  // Year-on-year line chart
+  const thisWP  = byYear[thisYr]?.total ? Math.round(byYear[thisYr].won/byYear[thisYr].total*100) : null;
+  const lastWP  = byYear[lastYr]?.total ? Math.round(byYear[lastYr].won/byYear[lastYr].total*100) : null;
+  const delta   = thisWP !== null && lastWP !== null ? thisWP - lastWP : null;
+  const thisEvt = byYear[thisYr]?.events || 0;
+  const thisMed = byYear[thisYr]?.medals || 0;
+
+  // Net touches per year for sparkline
+  const netByYear = years.map(y => {
+    const d = byYear[y];
+    if (!d?.total) return 0;
+    return Math.round(((d.touchesFor||0)-(d.touchesAgainst||0))/d.total*10)/10;
+  });
+
   const lineData = {
     labels: years,
     datasets: [{
-      label: 'Win rate',
-      data: years.map(y => byYear[y]?.total ? Math.round(byYear[y].won / byYear[y].total * 100) : 0),
-      borderColor: T.primary,
-      backgroundColor: T.primary + '18',
-      borderWidth: 2,
-      pointBackgroundColor: T.primary,
-      pointRadius: 4,
-      tension: 0.4,
-      fill: true,
-    }, {
-      label: 'Poule',
-      data: years.map(y => byYear[y]?.pouleT ? Math.round(byYear[y].pouleW / byYear[y].pouleT * 100) : 0),
-      borderColor: T.info,
-      backgroundColor: 'transparent',
-      borderWidth: 1.5,
-      pointRadius: 3,
-      borderDash: [4, 3],
-      tension: 0.4,
-    }, {
-      label: 'DE',
-      data: years.map(y => byYear[y]?.deT ? Math.round(byYear[y].deW / byYear[y].deT * 100) : 0),
-      borderColor: T.surface3 + 'cc',
-      backgroundColor: 'transparent',
-      borderWidth: 1.5,
-      pointRadius: 3,
-      borderDash: [4, 3],
-      tension: 0.4,
+      label:'Win %',
+      data: years.map(y => byYear[y]?.total ? Math.round(byYear[y].won/byYear[y].total*100) : 0),
+      borderColor: T.primary, backgroundColor: T.primary+'18',
+      borderWidth:2, pointBackgroundColor:T.primary, pointRadius:4, tension:0.4, fill:true,
+    },{
+      label:'Poule %',
+      data: years.map(y => byYear[y]?.pouleT ? Math.round(byYear[y].pouleW/byYear[y].pouleT*100) : 0),
+      borderColor: T.info, backgroundColor:'transparent',
+      borderWidth:1.5, pointRadius:3, borderDash:[4,3], tension:0.4,
+    },{
+      label:'DE %',
+      data: years.map(y => byYear[y]?.deT ? Math.round(byYear[y].deW/byYear[y].deT*100) : 0),
+      borderColor: T.textTertiary, backgroundColor:'transparent',
+      borderWidth:1.5, pointRadius:3, borderDash:[4,3], tension:0.4,
     }],
   };
+
   const lineOpts = {
-    responsive: true, maintainAspectRatio: false,
-    plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y}%` } } },
-    scales: {
-      x: { ticks: { color: T.textTertiary, font: { size: 10 } }, grid: { display: false } },
-      y: { min: 0, max: 100, ticks: { color: T.textTertiary, font: { size: 10 }, callback: v => v + '%' }, grid: { color: T.surface2 + '88' } },
+    responsive:true, maintainAspectRatio:false,
+    plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label: ctx=>`${ctx.dataset.label}: ${ctx.parsed.y}%` } } },
+    scales:{
+      x:{ ticks:{color:T.textTertiary,font:{size:10}}, grid:{display:false}, border:{color:'transparent'} },
+      y:{ min:0, max:100, ticks:{color:T.textTertiary,font:{size:10},callback:v=>v+'%'}, grid:{color:T.surface3+'66'}, border:{color:'transparent'} },
     },
   };
 
-  // Current season data
-  const thisYearWP = byYear[thisYr]?.total
-    ? Math.round(byYear[thisYr].won / byYear[thisYr].total * 100) : null;
-  const lastYr = (new Date().getFullYear() - 1).toString();
-  const lastYearWP = byYear[lastYr]?.total
-    ? Math.round(byYear[lastYr].won / byYear[lastYr].total * 100) : null;
-  const yearDelta = thisYearWP !== null && lastYearWP !== null ? thisYearWP - lastYearWP : null;
-
-  const insightColors = {
-    positive: { bg: '#052e16', border: T.success, text: '#86efac', icon: T.success },
-    warning:  { bg: '#450a0a', border: T.danger,  text: '#fca5a5', icon: T.danger },
-    neutral:  { bg: '#1e3a5f', border: T.info,    text: '#93c5fd', icon: T.info },
-  };
-
-  const fade = (delay) => ({
-    opacity: animIn ? 1 : 0,
-    transform: animIn ? 'translateY(0)' : 'translateY(12px)',
-    transition: `opacity .4s ease ${delay}ms, transform .4s ease ${delay}ms`,
+  const card = (extra={}) => ({
+    background: T.surface1,
+    border: `1px solid ${T.surface3}`,
+    borderRadius: T.borderRadius,
+    ...extra,
   });
 
+  const fade = d => ({
+    opacity: animIn?1:0,
+    transform: animIn?'translateY(0)':'translateY(14px)',
+    transition: `opacity .35s ease ${d}ms, transform .35s ease ${d}ms`,
+  });
+
+  const insightBg = { positive: { bg:'#052e16', border:'#16A34A', text:'#86efac' }, warning:{ bg:'#450a0a', border:'#EF4444', text:'#fca5a5' }, neutral:{ bg:'#1e3a5f', border:'#3B82F6', text:'#93c5fd' } };
+  // Light mode overrides for insight cards
+  const insightBgLight = { positive:{ bg:'#f0fdf4', border:'#16A34A', text:'#15803d' }, warning:{ bg:'#fef2f2', border:'#EF4444', text:'#dc2626' }, neutral:{ bg:'#eff6ff', border:'#3B82F6', text:'#1d4ed8' } };
+  const iColors = (type) => T.mode==='light' ? insightBgLight[type] : insightBg[type];
+
   return (
-    <div style={{ padding: '14px 14px 24px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div style={{ padding:'14px 14px 32px', display:'flex', flexDirection:'column', gap:12, background:T.black, minHeight:'100%' }}>
 
       {/* ── HERO CARD ── */}
-      <div style={{
-        ...fade(0),
-        background: `linear-gradient(135deg, ${T.surface1} 0%, ${T.surface2} 100%)`,
-        border: `0.5px solid ${T.surface3}`,
-        borderLeft: `3px solid ${fencer.colour || T.primary}`,
-        borderRadius: T.borderRadius,
-        padding: '16px 14px',
-        position: 'relative',
-        overflow: 'hidden',
-      }}>
-        {/* Decorative circle */}
-        <div style={{
-          position: 'absolute', right: -20, top: -20,
-          width: 100, height: 100, borderRadius: '50%',
-          background: (fencer.colour || T.primary) + '08',
-          border: `0.5px solid ${(fencer.colour || T.primary)}18`,
-        }}/>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          {/* Avatar */}
+      <div style={{ ...card(), ...fade(0), padding:'18px 16px', borderLeft:`3px solid ${fencer.colour||T.primary}`, position:'relative', overflow:'hidden' }}>
+        <div style={{ position:'absolute', right:-16, top:-16, width:90, height:90, borderRadius:'50%', background:(fencer.colour||T.primary)+'0a', border:`1px solid ${(fencer.colour||T.primary)}18` }}/>
+        <div style={{ display:'flex', alignItems:'center', gap:14 }}>
           <div style={{
-            width: 56, height: 56, borderRadius: '50%', flexShrink: 0,
-            background: (fencer.colour || T.primary) + '22',
-            border: `2px solid ${(fencer.colour || T.primary)}44`,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: 20, fontWeight: 600, color: fencer.colour || T.primary,
-            letterSpacing: '-0.5px',
+            width:56, height:56, borderRadius:'50%', flexShrink:0,
+            background:(fencer.colour||T.primary)+'22', border:`2px solid ${(fencer.colour||T.primary)}55`,
+            display:'flex', alignItems:'center', justifyContent:'center',
+            fontSize:20, fontWeight:700, color:fencer.colour||T.primary,
           }}>
-            {fencer.name?.split(' ').map(p => p[0]).join('').slice(0, 2)}
+            {fencer.name?.split(' ').map(p=>p[0]).join('').slice(0,2)}
           </div>
-
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 18, fontWeight: 600, color: T.textPrimary, letterSpacing: '-0.3px' }}>
-              {fencer.first_name || fencer.name?.split(' ')[0]}
-              <span style={{ color: T.textSecondary, fontWeight: 400 }}>
-                {' '}{fencer.name?.split(' ').slice(1).join(' ')}
-              </span>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ fontSize:18, fontWeight:700, color:T.textPrimary, letterSpacing:'-0.3px' }}>
+              {fencer.name?.split(' ')[0]}
+              <span style={{ color:T.textSecondary, fontWeight:400 }}> {fencer.name?.split(' ').slice(1).join(' ')}</span>
             </div>
-
-            {/* Club + school */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 4, flexWrap: 'wrap' }}>
-              <Icon d={Icons.shield} size={11} color={T.primary} />
-              <span style={{ fontSize: 11, color: T.primary, fontWeight: 500 }}>{fencer.club || 'Allez Fencing'}</span>
+            <div style={{ fontSize:12, color:T.primary, fontWeight:500, marginTop:3 }}>
+              🤺 {fencer.club||'Allez Fencing'}
             </div>
-            {fencer.school && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 2 }}>
-                <Icon d={Icons.location} size={11} color={T.textTertiary} />
-                <span style={{ fontSize: 11, color: T.textTertiary }}>{fencer.school}</span>
+            <div style={{ fontSize:11, color:T.textTertiary, marginTop:2 }}>
+              {fencer.category} · BF {fencer.bf_licence}
+              {fencer.school && ` · ${fencer.school}`}
+            </div>
+          </div>
+          <div style={{ textAlign:'right', flexShrink:0 }}>
+            <div style={{ fontSize:10, color:T.textTertiary, textTransform:'uppercase', letterSpacing:'.05em' }}>Season</div>
+            <div style={{ fontSize:26, fontWeight:800, color:thisWP!==null?(delta>=0?T.success:T.danger):T.textTertiary, lineHeight:1.1, letterSpacing:'-1px' }}>
+              {thisWP!==null?`${thisWP}%`:'—'}
+            </div>
+            {delta!==null && (
+              <div style={{ fontSize:11, color:delta>=0?T.success:T.danger, fontWeight:600 }}>
+                {delta>=0?'▲':'▼'} {Math.abs(delta)}pp
               </div>
             )}
           </div>
+        </div>
+      </div>
 
-          {/* Right side — category + BF badge */}
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 5, flexShrink: 0 }}>
-            <div style={{
-              background: T.primary, color: 'white',
-              fontSize: 13, fontWeight: 600, padding: '5px 10px', borderRadius: 6,
-              letterSpacing: '0.5px',
-            }}>
-              {fencer.category || 'U13'}
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <Icon d={Icons.sword} size={10} color={T.textTertiary} />
-              <span style={{ fontSize: 10, color: T.textTertiary }}>BF {fencer.bf_licence}</span>
-            </div>
+      {/* ── SEASON + CAREER STATS ── */}
+      <div style={{ ...fade(80), display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+
+        {/* 2026 Season card */}
+        <div style={{ ...card(), padding:'14px' }}>
+          <div style={{ fontSize:10, color:T.textTertiary, textTransform:'uppercase', letterSpacing:'.06em', marginBottom:10, fontWeight:500 }}>
+            🚀 {thisYr} Season
+          </div>
+          <div style={{ fontSize:36, fontWeight:800, color:T.primary, lineHeight:1, letterSpacing:'-2px', marginBottom:8 }}>
+            {thisWP!==null?`${thisWP}%`:'—'}
+          </div>
+          <div style={{ fontSize:11, color:T.textSecondary }}>Win rate</div>
+          <div style={{ borderTop:`1px solid ${T.surface3}`, marginTop:10, paddingTop:10, display:'flex', flexDirection:'column', gap:5 }}>
+            {[
+              [`⚔️ ${byYear[thisYr]?.total||0}`, 'bouts'],
+              [`📅 ${thisEvt}`, 'events'],
+              [`🥇 ${thisMed}`, 'medals'],
+            ].map(([val,lbl]) => (
+              <div key={lbl} style={{ display:'flex', justifyContent:'space-between', fontSize:12 }}>
+                <span style={{ color:T.textPrimary, fontWeight:500 }}>{val}</span>
+                <span style={{ color:T.textTertiary }}>{lbl}</span>
+              </div>
+            ))}
           </div>
         </div>
 
-        {/* Recent form dots */}
-        {recentForm.length > 0 && (
-          <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ fontSize: 10, color: T.textTertiary }}>Recent form</span>
-            <div style={{ display: 'flex', gap: 3 }}>
-              {recentForm.map((r, i) => (
-                <div key={i} style={{
-                  width: 8, height: 8, borderRadius: '50%',
-                  background: r === 'W' ? T.success : T.danger,
-                  opacity: 1 - (i * 0.06),
-                }}/>
-              ))}
+        {/* Career card */}
+        <div style={{ ...card(), padding:'14px' }}>
+          <div style={{ fontSize:10, color:T.textTertiary, textTransform:'uppercase', letterSpacing:'.06em', marginBottom:10, fontWeight:500 }}>
+            📊 Career
+          </div>
+          <div style={{ fontSize:36, fontWeight:800, color:T.textPrimary, lineHeight:1, letterSpacing:'-2px', marginBottom:8 }}>
+            {c.winPct||0}%
+          </div>
+          <div style={{ fontSize:11, color:T.textSecondary }}>Win rate</div>
+          <div style={{ borderTop:`1px solid ${T.surface3}`, marginTop:10, paddingTop:10, display:'flex', flexDirection:'column', gap:5 }}>
+            {[
+              [`⚔️ ${c.bouts||0}`, 'total bouts'],
+              [`🥇 ${c.medals||0}`, 'medals'],
+              [`🏆 ${c.top8||0}`, 'top 8s'],
+            ].map(([val,lbl]) => (
+              <div key={lbl} style={{ display:'flex', justifyContent:'space-between', fontSize:12 }}>
+                <span style={{ color:T.textPrimary, fontWeight:500 }}>{val}</span>
+                <span style={{ color:T.textTertiary }}>{lbl}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* ── POULE vs DE ── */}
+      <div style={{ ...card(), ...fade(140), padding:'14px 16px' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
+          <span style={{ fontSize:11, color:T.textTertiary, textTransform:'uppercase', letterSpacing:'.06em', fontWeight:500 }}>
+            Poule vs DE
+          </span>
+          <span style={{
+            fontSize:10, padding:'2px 8px', borderRadius:10, fontWeight:600,
+            background: (c.pouleWinPct-c.deWinPct)>15 ? '#EF444422' : '#16A34A22',
+            color:      (c.pouleWinPct-c.deWinPct)>15 ? T.danger     : T.success,
+          }}>
+            {(c.pouleWinPct||0)-(c.deWinPct||0)>0 ? `${(c.pouleWinPct||0)-(c.deWinPct||0)}pp gap` : 'Balanced'}
+          </span>
+        </div>
+        {[
+          { emoji:'📋', lbl:'Poule', val:c.pouleWinPct||0, col:T.info },
+          { emoji:'⚡', lbl:'DE',    val:c.deWinPct||0,    col:T.primary },
+        ].map(b => (
+          <div key={b.lbl} style={{ marginBottom:10 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', marginBottom:4 }}>
+              <span style={{ fontSize:12, color:T.textSecondary, fontWeight:500 }}>{b.emoji} {b.lbl}</span>
+              <span style={{ fontSize:13, fontWeight:700, color:b.col }}>{b.val}%</span>
             </div>
+            <div style={{ height:8, background:T.surface2, borderRadius:4, overflow:'hidden' }}>
+              <div style={{ height:8, background:b.col, borderRadius:4, width:`${b.val}%`, transition:'width .9s cubic-bezier(0.34,1.56,0.64,1)' }}/>
+            </div>
+          </div>
+        ))}
+        {(c.pouleWinPct-c.deWinPct)>10 && (
+          <div style={{ fontSize:11, color:T.textTertiary, marginTop:4, fontStyle:'italic' }}>
+            DE conversion is the key development area
           </div>
         )}
       </div>
 
-      {/* ── HEADLINE METRICS ── */}
-      <div style={{ ...fade(80), display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 8 }}>
-
-        {/* Career win rate */}
-        <div style={{
-          background: T.surface1, border: `0.5px solid ${T.surface2}`,
-          borderRadius: T.borderRadius, padding: '12px 14px',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-            <Icon d={Icons.target} size={12} color={T.primary} />
-            <span style={{ fontSize: 10, color: T.textTertiary, textTransform: 'uppercase', letterSpacing: '.05em' }}>Career win rate</span>
-          </div>
-          <div style={{ fontSize: 32, fontWeight: 700, color: T.primary, lineHeight: 1, letterSpacing: '-1px' }}>
-            {c.winPct || 0}%
-          </div>
-          <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 4 }}>
-            {c.won || 0}W · {(c.bouts || 0) - (c.won || 0)}L · {c.bouts || 0} bouts
-          </div>
+      {/* ── YEAR-BY-YEAR TABLE (Magicpath style) ── */}
+      <div style={{ ...card(), ...fade(180), padding:'14px 16px' }}>
+        <div style={{ fontSize:11, color:T.textTertiary, textTransform:'uppercase', letterSpacing:'.06em', fontWeight:500, marginBottom:12 }}>
+          Career Overview — season by season
         </div>
-
-        {/* This season */}
-        <div style={{
-          background: T.surface1, border: `0.5px solid ${T.surface2}`,
-          borderRadius: T.borderRadius, padding: '12px 14px',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-            <Icon d={Icons.bolt} size={12} color={T.success} />
-            <span style={{ fontSize: 10, color: T.textTertiary, textTransform: 'uppercase', letterSpacing: '.05em' }}>{thisYr} season</span>
-          </div>
-          <div style={{ fontSize: 32, fontWeight: 700, color: T.success, lineHeight: 1, letterSpacing: '-1px' }}>
-            {thisYearWP !== null ? `${thisYearWP}%` : '—'}
-          </div>
-          {yearDelta !== null && (
-            <div style={{ fontSize: 11, marginTop: 4, color: yearDelta >= 0 ? T.success : T.danger }}>
-              {yearDelta >= 0 ? '▲' : '▼'} {Math.abs(yearDelta)}pp vs {lastYr}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* ── FOUR STAT PILLS ── */}
-      <div style={{ ...fade(140), display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0,1fr))', gap: 6 }}>
-        {[
-          { icon: Icons.chart,  val: c.events || 0,   lbl: 'Events',    col: T.textPrimary },
-          { icon: Icons.trophy, val: c.medals || 0,   lbl: 'Medals',    col: T.primary },
-          { icon: Icons.star,   val: c.top8   || 0,   lbl: 'Top 8s',    col: T.warning },
-          { icon: Icons.bolt,   val: c.avgNet >= 0 ? `+${c.avgNet}` : c.avgNet,
-                                                       lbl: 'Net/bout',  col: (c.avgNet || 0) >= 0 ? T.success : T.danger },
-        ].map(m => (
-          <div key={m.lbl} style={{
-            background: T.surface2, borderRadius: 8,
-            padding: '10px 8px', textAlign: 'center',
-          }}>
-            <Icon d={m.icon} size={14} color={m.col} />
-            <div style={{ fontSize: 18, fontWeight: 600, color: m.col, marginTop: 4, lineHeight: 1, letterSpacing: '-0.5px' }}>{m.val}</div>
-            <div style={{ fontSize: 9, color: T.textTertiary, marginTop: 3, textTransform: 'uppercase', letterSpacing: '.04em' }}>{m.lbl}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* ── POULE vs DE BAR ── */}
-      <div style={{
-        ...fade(180),
-        background: T.surface1, border: `0.5px solid ${T.surface2}`,
-        borderRadius: T.borderRadius, padding: 14,
-      }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
-          <div style={{ fontSize: 11, color: T.textTertiary, textTransform: 'uppercase', letterSpacing: '.05em', display: 'flex', alignItems: 'center', gap: 5 }}>
-            <Icon d={Icons.chart} size={11} color={T.textTertiary} />
-            Poule vs DE
-          </div>
-          <span style={{
-            fontSize: 10, padding: '2px 8px', borderRadius: 10,
-            background: (c.pouleWinPct - c.deWinPct) > 15 ? '#450a0a' : '#052e16',
-            color: (c.pouleWinPct - c.deWinPct) > 15 ? '#fca5a5' : '#86efac',
-            fontWeight: 500,
-          }}>
-            {c.pouleWinPct - c.deWinPct > 0 ? `${c.pouleWinPct - c.deWinPct}pp gap` : 'Balanced'}
-          </span>
-        </div>
-        {[
-          { lbl: 'Poule', val: c.pouleWinPct || 0, col: T.primary },
-          { lbl: 'DE',    val: c.deWinPct    || 0, col: T.info },
-        ].map(b => (
-          <div key={b.lbl} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-            <span style={{ fontSize: 11, color: T.textSecondary, width: 40 }}>{b.lbl}</span>
-            <div style={{ flex: 1, height: 8, background: T.surface2, borderRadius: 4 }}>
-              <div style={{
-                height: 8, borderRadius: 4, background: b.col,
-                width: `${b.val}%`,
-                transition: 'width 0.8s cubic-bezier(0.34, 1.56, 0.64, 1)',
-              }}/>
-            </div>
-            <span style={{ fontSize: 12, fontWeight: 600, color: b.col, width: 34, textAlign: 'right' }}>{b.val}%</span>
-          </div>
-        ))}
-      </div>
-
-      {/* ── PROGRESS CHART ── */}
-      <div style={{
-        ...fade(220),
-        background: T.surface1, border: `0.5px solid ${T.surface2}`,
-        borderRadius: T.borderRadius, padding: 14,
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 12 }}>
-          <Icon d={Icons.trend} size={12} color={T.textTertiary} />
-          <span style={{ fontSize: 11, color: T.textTertiary, textTransform: 'uppercase', letterSpacing: '.05em' }}>Year-on-year progress</span>
-        </div>
-        <div style={{ height: 160 }}>
-          <Line data={lineData} options={lineOpts} />
-        </div>
-        <div style={{ display: 'flex', gap: 14, marginTop: 10 }}>
-          {[['Win rate', T.primary, false], ['Poule', T.info, true], ['DE', T.surface3, true]].map(([lbl, col, dashed]) => (
-            <div key={lbl} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-              <div style={{
-                width: 16, height: 2,
-                background: dashed ? 'transparent' : col,
-                borderTop: dashed ? `2px dashed ${col}` : 'none',
-              }}/>
-              <span style={{ fontSize: 10, color: T.textTertiary }}>{lbl}</span>
-            </div>
-          ))}
+        <div style={{ overflowX:'auto', WebkitOverflowScrolling:'touch' }}>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12, minWidth:480 }}>
+            <thead>
+              <tr style={{ borderBottom:`1px solid ${T.surface3}` }}>
+                {['YEAR','⚔️ BOUTS','WIN RATE','📋 POULE W/T','%','⚡ DE W/T','%','✅ FOR','❌ AGN','🎯 NET'].map(h => (
+                  <th key={h} style={{ padding:'6px 8px 8px', textAlign:h==='YEAR'?'left':'center', fontSize:9, fontWeight:600, color:T.textTertiary, textTransform:'uppercase', letterSpacing:'.04em', whiteSpace:'nowrap' }}>
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {years.map((yr, i) => {
+                const d = byYear[yr] || {};
+                const wp   = d.total   ? Math.round(d.won/d.total*100)       : 0;
+                const ppct = d.pouleT  ? Math.round(d.pouleW/d.pouleT*100)   : 0;
+                const dpct = d.deT     ? Math.round(d.deW/d.deT*100)         : 0;
+                const net  = (d.touchesFor||0)-(d.touchesAgainst||0);
+                const isThis = yr===thisYr;
+                return (
+                  <tr key={yr} style={{
+                    borderBottom: i<years.length-1 ? `1px solid ${T.surface3}` : 'none',
+                    background: isThis ? T.primary+'0d' : 'transparent',
+                  }}>
+                    <td style={{ padding:'10px 8px', fontWeight:700, color:isThis?T.primary:T.textPrimary, whiteSpace:'nowrap' }}>
+                      {yearEmoji(yr, byYear)} {yr}{isThis?' YTD':''}
+                    </td>
+                    <td style={{ padding:'10px 8px', textAlign:'center', color:T.textPrimary, fontWeight:600 }}>{d.total||0}</td>
+                    <td style={{ padding:'10px 8px', textAlign:'center', fontWeight:700, color:wp>=60?T.success:wp>=45?T.warning:T.danger }}>{wp}%</td>
+                    <td style={{ padding:'10px 8px', textAlign:'center', color:T.textSecondary }}>{d.pouleW||0}/{d.pouleT||0}</td>
+                    <td style={{ padding:'10px 8px', textAlign:'center', color:T.info, fontWeight:600 }}>{ppct}%</td>
+                    <td style={{ padding:'10px 8px', textAlign:'center', color:T.textSecondary }}>{d.deW||0}/{d.deT||0}</td>
+                    <td style={{ padding:'10px 8px', textAlign:'center', color:T.primary, fontWeight:600 }}>{dpct}%</td>
+                    <td style={{ padding:'10px 8px', textAlign:'center', color:T.success, fontWeight:500 }}>{d.touchesFor||0}</td>
+                    <td style={{ padding:'10px 8px', textAlign:'center', color:T.danger, fontWeight:500 }}>{d.touchesAgainst||0}</td>
+                    <td style={{ padding:'10px 8px', textAlign:'center', fontWeight:700, color:net>=0?T.success:T.danger }}>
+                      {net>0?`+${net}`:net}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       </div>
+
+      {/* ── NET TOUCHES TREND CHART ── */}
+      {years.length >= 2 && (
+        <div style={{ ...card(), ...fade(220), padding:'14px 16px' }}>
+          <div style={{ fontSize:11, color:T.textTertiary, textTransform:'uppercase', letterSpacing:'.06em', fontWeight:500, marginBottom:4 }}>
+            Win Rate Trend
+          </div>
+          <div style={{ fontSize:11, color:T.textTertiary, marginBottom:12 }}>
+            Season-by-season performance — Win rate, Poule & DE
+          </div>
+          <div style={{ height:160 }}>
+            <Line data={lineData} options={lineOpts} />
+          </div>
+          <div style={{ display:'flex', gap:16, marginTop:10 }}>
+            {[['Win rate',T.primary,false],['📋 Poule',T.info,true],['⚡ DE',T.textTertiary,true]].map(([lbl,col,dashed])=>(
+              <div key={lbl} style={{ display:'flex', alignItems:'center', gap:5 }}>
+                <div style={{ width:16, height:2, background:dashed?'transparent':col, borderTop:dashed?`2px dashed ${col}`:'none' }}/>
+                <span style={{ fontSize:10, color:T.textTertiary }}>{lbl}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ── AI INSIGHTS ── */}
       {insights.length > 0 && (
-        <div style={{ ...fade(280) }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-            <Icon d={Icons.brain} size={13} color={T.primary} />
-            <span style={{ fontSize: 11, color: T.textTertiary, textTransform: 'uppercase', letterSpacing: '.05em' }}>
-              AI performance insights
-            </span>
+        <div style={{ ...fade(260) }}>
+          <div style={{ fontSize:11, color:T.textTertiary, textTransform:'uppercase', letterSpacing:'.06em', fontWeight:500, marginBottom:8 }}>
+            🧠 Performance insights
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {insights.map((ins, i) => {
-              const ic = insightColors[ins.type];
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px,1fr))', gap:8 }}>
+            {insights.map((ins,i) => {
+              const ic = iColors(ins.type);
               return (
                 <div key={i} style={{
-                  background: ic.bg,
-                  border: `0.5px solid ${ic.border}22`,
-                  borderLeft: `2px solid ${ic.border}`,
-                  borderRadius: T.borderRadius,
-                  padding: '11px 12px',
-                  display: 'flex', gap: 10, alignItems: 'flex-start',
+                  background: ic.bg, border:`1px solid ${ic.border}33`,
+                  borderRadius: T.borderRadius, padding:'12px',
                 }}>
-                  <div style={{ marginTop: 1, flexShrink: 0 }}>
-                    <Icon d={Icons[ins.icon]} size={14} color={ic.icon} />
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: ic.text, marginBottom: 3 }}>{ins.title}</div>
-                    <div style={{ fontSize: 12, color: ic.text, opacity: 0.8, lineHeight: 1.55 }}>{ins.body}</div>
-                  </div>
+                  <div style={{ fontSize:22, marginBottom:6 }}>{ins.emoji}</div>
+                  <div style={{ fontSize:10, fontWeight:700, color:ic.text, textTransform:'uppercase', letterSpacing:'.04em', marginBottom:3 }}>{ins.label}</div>
+                  <div style={{ fontSize:13, fontWeight:700, color:ic.text, marginBottom:4, lineHeight:1.2 }}>{ins.title}</div>
+                  <div style={{ fontSize:11, color:ic.text, opacity:.8, lineHeight:1.5 }}>{ins.body}</div>
                 </div>
               );
             })}
@@ -454,52 +367,36 @@ export default function OverviewTab({ fencer, stats, competitions }) {
       )}
 
       {/* ── BEST RESULTS ── */}
-      {competitions?.filter(c => c.rank && c.rank <= 8).length > 0 && (
-        <div style={{
-          ...fade(340),
-          background: T.surface1, border: `0.5px solid ${T.surface2}`,
-          borderRadius: T.borderRadius, padding: 14,
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 10 }}>
-            <Icon d={Icons.medal} size={12} color={T.textTertiary} />
-            <span style={{ fontSize: 11, color: T.textTertiary, textTransform: 'uppercase', letterSpacing: '.05em' }}>Best results</span>
+      {competitions?.filter(c=>c.rank&&c.rank<=8).length > 0 && (
+        <div style={{ ...card(), ...fade(300), padding:'14px 16px' }}>
+          <div style={{ fontSize:11, color:T.textTertiary, textTransform:'uppercase', letterSpacing:'.06em', fontWeight:500, marginBottom:12 }}>
+            🏆 Best results
           </div>
-          {competitions.filter(c => c.rank && c.rank <= 8).slice(0, 6).map((comp, i) => {
-            const isMedal = comp.rank <= 3;
-            const ordinal = ['', '1st', '2nd', '3rd'][comp.rank] || `${comp.rank}th`;
+          {competitions.filter(c=>c.rank&&c.rank<=8).slice(0,6).map((comp,i,arr) => {
+            const medal = comp.rank===1?'🥇':comp.rank===2?'🥈':comp.rank===3?'🥉':null;
+            const ordinal = ['','1st','2nd','3rd'][comp.rank]||`${comp.rank}th`;
             return (
               <div key={i} style={{
-                display: 'flex', alignItems: 'center', gap: 10,
-                padding: '9px 0',
-                borderBottom: i < 5 ? `0.5px solid ${T.surface2}` : 'none',
+                display:'flex', alignItems:'center', gap:12, padding:'10px 0',
+                borderBottom: i<arr.length-1?`1px solid ${T.surface3}`:'none',
               }}>
                 <div style={{
-                  width: 32, height: 32, borderRadius: 8, flexShrink: 0,
-                  background: isMedal ? T.primary + '22' : T.surface2,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 11, fontWeight: 700,
-                  color: isMedal ? T.primary : T.textSecondary,
+                  width:36, height:36, borderRadius:8, flexShrink:0,
+                  background: medal?T.primary+'22':T.surface2,
+                  display:'flex', alignItems:'center', justifyContent:'center',
+                  fontSize: medal?20:12, fontWeight:700,
+                  color: medal?'unset':T.textSecondary,
                 }}>
-                  {isMedal ? <Icon d={Icons.trophy} size={14} color={T.primary} /> : ordinal}
+                  {medal||ordinal}
                 </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 12, color: T.textPrimary, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:13, color:T.textPrimary, fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
                     {comp.name}
                   </div>
-                  <div style={{ fontSize: 10, color: T.textTertiary, marginTop: 2 }}>
-                    {comp.date?.slice(0, 7)} · {comp.field_size} fencers
-                    {isMedal && ` · ${ordinal} place`}
+                  <div style={{ fontSize:11, color:T.textTertiary, marginTop:2 }}>
+                    {comp.date?.slice(0,7)} · {comp.field_size} fencers · {ordinal} place
                   </div>
                 </div>
-                {isMedal && (
-                  <span style={{
-                    fontSize: 10, padding: '2px 7px', borderRadius: 10,
-                    background: T.primary + '22', color: T.primary, fontWeight: 600,
-                    flexShrink: 0,
-                  }}>
-                    {comp.rank === 1 ? '🥇' : comp.rank === 2 ? '🥈' : '🥉'}
-                  </span>
-                )}
               </div>
             );
           })}
