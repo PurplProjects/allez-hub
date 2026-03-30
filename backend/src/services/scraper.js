@@ -1,18 +1,22 @@
 /**
- * Allez Fencing Hub — Hybrid Scraper v5
+ * Allez Fencing Hub — Scraper v6 (UKRatings-first)
  *
- * UK tournaments (primary path):
- *   1. UKRatings athlete page → list of tournament IDs (server-rendered, fast)
- *   2. UKRatings tourney detail → FTL tournament URL (via "Tournament Website" link)
- *   3. FTL tournament schedule (Puppeteer) → event GUIDs
- *   4. FTL /events/results/data/{guid} → find fencer by name, get place/field
- *   5. FTL pool + tableau pages (Puppeteer) → bout scores
+ * Primary pipeline (UKRatings):
+ *   1. /tourneys/athleteex/34/{ukr_id}
+ *        → list of competitions: tourneyId, eventName, rank, fieldSize
+ *   2. /tourneys/tourneydetail/{tourneyId}
+ *        → match eventName to find eventfinalresults/{eventId}
+ *   3. /tourneys/eventfinalresults/{eventId}
+ *        → date from header (MM.DD.YYYY)
+ *        → links to eventroundpoolmatches/{id} (may be multiple)
+ *        → link to eventelim/{id}
+ *   4. /tourneys/eventroundpoolmatches/{id}
+ *        → rows: [pool_pos, fencerA, scoreA, scoreB, fencerB, pool_pos]
+ *   5. /tourneys/eventelim/{id}
+ *        → walk DOM items, backward/forward scan by bb-score-row-* CSS class
  *
- * Non-UK / manual tournaments (secondary path):
- *   Coach or fencer provides FTL event URL directly.
- *   See scrapeFromFTLUrl() — used by the "Add Tournament" feature.
- *   For coach: finds all Allez fencers in the event automatically.
- *   For fencer: loads only their own bouts.
+ * Secondary pipeline (manual FTL URL via "Add Tournament" tab):
+ *   scrapeFromFTLUrl() — for tournaments not yet on UKRatings
  */
 
 const axios    = require('axios');
@@ -22,554 +26,272 @@ const supabase = require('../db/supabase');
 const UKR = 'https://www.ukratings.co.uk';
 const FTL = 'https://www.fencingtimelive.com';
 
-const HEADERS_HTML = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-  'Accept':     'text/html,application/xhtml+xml',
-};
-const HEADERS_JSON = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-  'Accept':     'application/json',
+const HEADERS = {
+  'User-Agent':      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+  'Accept':          'text/html,application/xhtml+xml',
+  'Accept-Language': 'en-GB,en;q=0.5',
 };
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// Log chromium path on startup for debugging
-(function() {
-  const fs = require('fs');
-  const candidates = [
-    process.env.PLAYWRIGHT_CHROMIUM_PATH,
-    process.env.PUPPETEER_EXECUTABLE_PATH,
-    '/usr/bin/chromium',
-    '/usr/bin/chromium-browser',
-    '/usr/bin/google-chrome',
-    '/nix/var/nix/profiles/default/bin/chromium',
-  ].filter(Boolean);
-  const found = candidates.find(p => { try { return fs.existsSync(p); } catch { return false; } });
-  console.log(`[Scraper] Chromium: ${found || 'NOT FOUND — pool/tableau scraping disabled'}`);
-})();
-
-// Cookie jar for UKRatings — handles session cookies across redirects
-const https    = require('https');
-const http     = require('http');
-const { CookieJar } = (() => { try { return require('tough-cookie'); } catch { return { CookieJar: null }; } })();
+// ── HTTP helpers ─────────────────────────────────────────────────────────────
 
 async function fetchHTML(url) {
-  // Use axios with manual redirect handling to preserve cookies
   const jar = {};
-  let currentUrl = url;
-  
-  for (let attempt = 0; attempt < 8; attempt++) {
-    const res = await axios.get(currentUrl, {
-      headers: {
-        ...HEADERS_HTML,
-        'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-GB,en;q=0.5',
-        'Upgrade-Insecure-Requests': '1',
-        'Cookie':          Object.entries(jar).map(([k,v]) => `${k}=${v}`).join('; '),
-      },
-      timeout:      20000,
-      maxRedirects: 0,           // handle redirects manually
-      validateStatus: s => s < 400,
+  let cur = url;
+  for (let i = 0; i < 8; i++) {
+    const res = await axios.get(cur, {
+      headers: { ...HEADERS, Cookie: Object.entries(jar).map(([k,v]) => `${k}=${v}`).join('; ') },
+      timeout: 20000, maxRedirects: 0, validateStatus: s => s < 400,
     });
-
-    // Collect any Set-Cookie headers
-    const setCookie = res.headers['set-cookie'];
-    if (setCookie) {
-      setCookie.forEach(c => {
-        const [pair] = c.split(';');
-        const [k, v] = pair.split('=');
-        if (k) jar[k.trim()] = (v || '').trim();
-      });
-    }
-
-    // If not a redirect, return the body
-    if (res.status < 300 || res.status >= 400) return res.data;
-
-    // Follow redirect
-    const location = res.headers['location'];
-    if (!location) return res.data;
-    currentUrl = location.startsWith('http') ? location : new URL(location, currentUrl).href;
+    (res.headers['set-cookie'] || []).forEach(c => {
+      const [pair] = c.split(';');
+      const [k, v] = pair.split('=');
+      if (k) jar[k.trim()] = (v || '').trim();
+    });
+    if (res.status < 300) return res.data;
+    const loc = res.headers['location'];
+    if (!loc) return res.data;
+    cur = loc.startsWith('http') ? loc : new URL(loc, cur).href;
   }
-
-  throw new Error(`Too many redirects for ${url}`);
 }
+
 async function fetchJSON(url) {
-  const res = await axios.get(url, { headers: HEADERS_JSON, timeout: 15000 });
-  return res.data;
+  return axios.get(url, { headers: { ...HEADERS, Accept: 'application/json' }, timeout: 10000 })
+    .then(r => r.data).catch(() => null);
 }
 
-// ── Get last sync date ────────────────────────────────────────
-async function getLastSyncDate(fencerId) {
-  const { data } = await supabase
-    .from('scrape_log')
-    .select('scraped_at')
-    .eq('fencer_id', fencerId)
-    .in('status', ['success', 'partial'])
-    .order('scraped_at', { ascending: false })
-    .limit(1)
-    .single();
-  return data?.scraped_at ? new Date(data.scraped_at) : null;
+// ── Name formatting ──────────────────────────────────────────────────────────
+
+// "SURNAME, First" → "First Surname"
+function formatName(raw) {
+  const clean = raw.replace(/^\d+\s+/, '').trim();
+  const parts = clean.split(', ');
+  if (parts.length === 2) {
+    const sur   = parts[0].trim();
+    const first = parts[1].trim();
+    return `${first} ${sur[0]}${sur.slice(1).toLowerCase()}`;
+  }
+  return clean;
 }
 
-// ═══════════════════════════════════════════════════════════════
-// PRIMARY PATH — UK tournaments via UKRatings
-// ═══════════════════════════════════════════════════════════════
+// ── Step 1: Competition list from athlete page ────────────────────────────────
 
-// Step 1: Get tournament list from UKRatings athlete page
-async function getUKRTournaments(ukrId, weaponId = '34') {
-  console.log(`  Fetching UKRatings profile for UKR ID ${ukrId}...`);
-  const html = await fetchHTML(`${UKR}/tourneys/athleteex/${weaponId}/${ukrId}/None`);
-  const $    = cheerio.load(html);
-
+async function getCompetitionList(ukrId) {
+  const html = await fetchHTML(`${UKR}/tourneys/athleteex/34/${ukrId}/None`);
+  const $ = cheerio.load(html);
   const competitions = [];
   const seen = new Set();
 
   $('tr[onclick*="tourneydetail"]').each((_, tr) => {
-    const onclick   = $(tr).attr('onclick') || '';
-    const tourneyId = onclick.match(/tourneydetail\/(\d+)/)?.[1];
-    if (!tourneyId || seen.has(tourneyId)) return;
-    seen.add(tourneyId);
+    const onclick = $(tr).attr('onclick') || '';
+    const tidMatch = onclick.match(/tourneydetail\/(\d+)/);
+    if (!tidMatch) return;
+    const ukrTourneyId = tidMatch[1];
 
     const cells = $(tr).find('td').map((_, td) => $(td).text().trim()).get();
     if (cells.length < 2) return;
 
-    // Cells: [tournament name, event name, points, rank "X of Y", rating, ...]
-    const rankStr = cells.find(c => c.includes(' of '));
-    const [rank, fieldSize] = rankStr
-      ? rankStr.split(' of ').map(s => parseInt(s.trim()))
-      : [null, null];
+    const tourneyName = cells[0];
+    const eventName   = cells[1];
 
-    competitions.push({
-      ukrTourneyId: tourneyId,
-      name:         cells[0],
-      eventName:    cells[1] || null,
-      rank:         rank || null,
-      fieldSize:    fieldSize || null,
-    });
+    const rankStr   = cells.find(c => /\d+ of \d+/.test(c));
+    const rankMatch = rankStr?.match(/(\d+) of (\d+)/);
+    const rank      = rankMatch ? parseInt(rankMatch[1]) : null;
+    const fieldSize = rankMatch ? parseInt(rankMatch[2]) : null;
+
+    if (!rank && !fieldSize) return; // upcoming/no data
+
+    const key = `${ukrTourneyId}|${eventName}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+
+    competitions.push({ ukrTourneyId, tourneyName, eventName, rank, fieldSize });
   });
 
-  console.log(`  Found ${competitions.length} competitions on UKRatings`);
   return competitions;
 }
 
-// Step 2: Get FTL tournament URL from UKRatings tourney detail page
-async function getFTLUrlFromUKR(ukrTourneyId) {
-  try {
-    const html = await fetchHTML(`${UKR}/tourneys/tourneydetail/${ukrTourneyId}`);
-    const $    = cheerio.load(html);
+// ── Step 2: Find eventfinalresults ID ────────────────────────────────────────
 
-    // Find the "Tournament Website" link pointing to FTL
-    let ftlUrl = null;
-    $('a').each((_, a) => {
-      const href = $(a).attr('href') || '';
-      if (href.includes('fencingtimelive.com')) {
-        ftlUrl = href;
-        return false; // break
-      }
-    });
+async function getEventFinalResultsId(ukrTourneyId, eventName) {
+  const html = await fetchHTML(`${UKR}/tourneys/tourneydetail/${ukrTourneyId}`);
+  const $ = cheerio.load(html);
 
-    if (!ftlUrl) return null;
+  const normalise = s => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const target = normalise(eventName);
+  let eventFinalResultsId = null;
 
-    // Extract tournament GUID from URL
-    // e.g. fencingtimelive.com/tournaments/eventSchedule/{GUID}
-    const m = ftlUrl.match(/tournaments\/[^/]+\/([A-F0-9]{32})/i);
-    return m ? { ftlUrl, ftlTournamentGUID: m[1].toUpperCase() } : null;
-  } catch {
-    return null;
-  }
-}
-
-// Step 3: Get event GUIDs from FTL tournament schedule (plain HTTP — GUIDs in raw HTML)
-// The schedule page embeds event GUIDs as data-href="/events/view/{GUID}" attributes
-// No Puppeteer needed — raw HTML contains all the data
-async function getFTLEventGUIDs(ftlTournamentGUID) {
-  try {
-    const res = await axios.get(
-      `${FTL}/tournaments/eventSchedule/${ftlTournamentGUID}`,
-      { headers: HEADERS_HTML, timeout: 15000 }
-    );
-    const html = res.data;
-
-    // GUIDs appear as: data-href="/events/view/{GUID}"
-    const dataHrefMatches = [...html.matchAll(/data-href="\/events\/(?:view|results)\/([A-F0-9]{32})"/gi)];
-    // Also catch any plain href links
-    const hrefMatches     = [...html.matchAll(/href="\/events\/(?:view|results)\/([A-F0-9]{32})"/gi)];
-
-    const seen  = new Set();
-    const guids = [];
-    [...dataHrefMatches, ...hrefMatches].forEach(m => {
-      const g = m[1].toUpperCase();
-      if (!seen.has(g)) { seen.add(g); guids.push(g); }
-    });
-
-    // Parse tournament date from schedule page e.g. "November 23, 2025" or "Sunday November 23, 2025"
-    let tourneyDate = null;
-    const dateMatch = html.match(/(?:Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday)\s+(\w+\s+\d{1,2},\s+\d{4})|(\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4})/i);
-    if (dateMatch) {
-      const raw = (dateMatch[1] || dateMatch[2]).trim();
-      const d   = new Date(raw);
-      if (!isNaN(d)) tourneyDate = d.toISOString().slice(0, 10); // YYYY-MM-DD
+  $('tr[onclick*="eventfinalresults"]').each((_, tr) => {
+    const text   = $(tr).text().replace(/\s+/g, ' ').trim();
+    const onclick = $(tr).attr('onclick') || '';
+    const idMatch = onclick.match(/eventfinalresults\/(\d+)/);
+    if (!idMatch) return;
+    if (normalise(text).includes(target)) {
+      eventFinalResultsId = idMatch[1];
+      return false;
     }
+  });
 
-    return { guids, tourneyDate };
-  } catch (err) {
-    console.warn(`    Could not get event GUIDs for tournament ${ftlTournamentGUID}: ${err.message}`);
-    return { guids: [], tourneyDate: null };
-  }
+  return eventFinalResultsId;
 }
 
-// Step 4: Search FTL event for a specific fencer
-async function searchFTLEventForFencer(eventGUID, surname, firstName) {
-  try {
-    const data = await fetchJSON(`${FTL}/events/results/data/${eventGUID}`);
-    if (!Array.isArray(data)) return null;
+// ── Step 3: Pool/elim IDs and date from eventfinalresults ────────────────────
 
-    const surnameL = surname.toLowerCase();
-    const firstL   = firstName.toLowerCase();
-    
-    // All candidates matching surname
-    const candidates = data.filter(f => {
-      const s = (f.search || '').toLowerCase();
-      return s.includes(surnameL);
+async function getEventDetails(eventFinalResultsId) {
+  const html = await fetchHTML(`${UKR}/tourneys/eventfinalresults/${eventFinalResultsId}`);
+  const $ = cheerio.load(html);
+
+  // Date: "MM.DD.YYYY" → "YYYY-MM-DD"
+  let date = null;
+  const dateMatch = html.match(/(\d{2})\.(\d{2})\.(\d{4})/);
+  if (dateMatch) date = `${dateMatch[3]}-${dateMatch[1]}-${dateMatch[2]}`;
+
+  const poolIds = [];
+  $('a[href*="eventroundpoolmatches"]').each((_, a) => {
+    const m = $(a).attr('href').match(/eventroundpoolmatches\/(\d+)/);
+    if (m && !poolIds.includes(m[1])) poolIds.push(m[1]);
+  });
+
+  let elimId = null;
+  $('a[href*="eventelim"]').each((_, a) => {
+    const m = $(a).attr('href').match(/eventelim\/(\d+)/);
+    if (m) { elimId = m[1]; return false; }
+  });
+
+  return { date, poolIds, elimId };
+}
+
+// ── Step 4: Pool bouts ───────────────────────────────────────────────────────
+
+async function scrapePoolBouts(poolId, surname) {
+  const html = await fetchHTML(`${UKR}/tourneys/eventroundpoolmatches/${poolId}`);
+  const $ = cheerio.load(html);
+  const bouts = [];
+  const surnameUpper = surname.toUpperCase();
+
+  $('table tr').each((_, tr) => {
+    const cells = $(tr).find('td').map((_, td) => $(td).text().trim()).get();
+    if (cells.length < 5) return;
+    if (!cells.some(c => c.toUpperCase().includes(surnameUpper))) return;
+
+    // [pool_pos, fencerA, scoreA, scoreB, fencerB, pool_pos]
+    const weAreA = cells[1].toUpperCase().includes(surnameUpper);
+    const opp    = weAreA ? cells[4] : cells[1];
+    const sf     = weAreA ? parseInt(cells[2]) : parseInt(cells[3]);
+    const sa     = weAreA ? parseInt(cells[3]) : parseInt(cells[2]);
+
+    if (isNaN(sf) || isNaN(sa) || !opp || opp.includes('BYE')) return;
+
+    bouts.push({
+      opponent:     formatName(opp),
+      scoreFor:     sf,
+      scoreAgainst: sa,
+      result:       sf > sa ? 'Won' : 'Lost',
+      type:         'Poule',
     });
+  });
 
-    if (!candidates.length) return null;
+  return bouts;
+}
 
-    let match = null;
+// ── Step 5: DE bouts ─────────────────────────────────────────────────────────
 
-    if (candidates.length === 1) {
-      // Only one person with this surname — use it
-      match = candidates[0];
-    } else if (firstL) {
-      // Multiple people with same surname — try to narrow by first name words
-      const firstWords = firstL.split(' ').filter(w => w.length > 1);
-      
-      // Score each candidate by how many first-name words match
-      const scored = candidates.map(f => {
-        const s = (f.search || '').toLowerCase();
-        const score = firstWords.filter(w => s.includes(w)).length;
-        return { f, score };
-      }).sort((a, b) => b.score - a.score);
+async function scrapeElimBouts(elimId, surname) {
+  const html = await fetchHTML(`${UKR}/tourneys/eventelim/${elimId}`);
+  const $ = cheerio.load(html);
+  const surnameUpper = surname.toUpperCase();
 
-      // Only accept if best match scores at least one word, and is unambiguous
-      if (scored[0].score > 0) {
-        // Check for ties at top score
-        const topScore = scored[0].score;
-        const topMatches = scored.filter(s => s.score === topScore);
-        if (topMatches.length === 1) {
-          match = topMatches[0].f; // clear winner
-        } else {
-          // Tie — try exact full name match as tiebreaker
-          const exact = topMatches.find(s => {
-            const searchStr = (s.f.search || '').toLowerCase();
-            return firstWords.every(w => searchStr.includes(w));
-          });
-          match = exact ? exact.f : topMatches[0].f;
-        }
-      } else {
-        // No first name match — if surnames are different clubs/contexts, 
-        // warn and skip rather than guess wrong
-        console.warn(`    Ambiguous: ${candidates.length} fencers named ${surname} in event ${eventGUID}, none match firstName "${firstName}" — skipping`);
-        return null;
+  // Walk all leaf text nodes collecting round + text + CSS class
+  const items = [];
+  let currentRound = '';
+
+  function walk(el) {
+    const txt = $(el).text().trim();
+    if (txt.match(/^Round \d+$/) || txt.match(/^(Semi Finals|Quarter Finals|Finals)$/)) {
+      currentRound = txt;
+    }
+    const children = $(el).children().toArray();
+    if (children.length === 0) {
+      if (txt) {
+        items.push({
+          round: currentRound,
+          text:  txt,
+          cls:   el.attribs?.class || $(el).parent().attr('class') || '',
+        });
       }
     } else {
-      // No firstName provided and multiple matches — can't disambiguate
-      console.warn(`    Ambiguous: ${candidates.length} fencers named ${surname} in event ${eventGUID} — skipping`);
-      return null;
+      children.forEach(c => walk(c));
     }
-
-    if (!match) return null;
-
-    // Also get pool and tableau GUIDs from event results page
-    let poolGUIDs = [], tableauGUIDs = [], eventName = null;
-    try {
-      const html = await fetchHTML(`${FTL}/events/results/${eventGUID}`);
-      const $ = require('cheerio').load(html);
-      
-      // Get event name from page title
-      eventName = $('h1, h2, .event-title').first().text().trim() || null;
-      
-      $('a[href*="/pools/scores/"]').each((_, a) => {
-        const m = $(a).attr('href').match(/\/pools\/scores\/[A-F0-9]{32}\/([A-F0-9]{32})/i);
-        if (m) { const g = m[1].toUpperCase(); if (!poolGUIDs.includes(g)) poolGUIDs.push(g); }
-      });
-      $('a[href*="/tableaus/scores/"]').each((_, a) => {
-        const m = $(a).attr('href').match(/\/tableaus\/scores\/[A-F0-9]{32}\/([A-F0-9]{32})/i);
-        if (m) { const g = m[1].toUpperCase(); if (!tableauGUIDs.includes(g)) tableauGUIDs.push(g); }
-      });
-    } catch {}
-
-    return {
-      eventGUID,
-      fencerGUID:   match.id,
-      place:        parseInt(match.place) || null,
-      fieldSize:    data.filter(f => !f.excluded).length,
-      eventName,
-      poolGUIDs,
-      tableauGUIDs,
-    };
-  } catch (err) {
-    console.warn(`    searchFTLEventForFencer error: ${err.message}`);
-    return null;
   }
-}
+  $('body').children().toArray().forEach(el => walk(el));
 
-// Step 5a: Scrape pool scores (Puppeteer)
-// Find chromium executable — try multiple locations
-function findChromium() {
-  const candidates = [
-    process.env.PLAYWRIGHT_CHROMIUM_PATH,
-    process.env.PUPPETEER_EXECUTABLE_PATH,
-    '/usr/bin/chromium',
-    '/usr/bin/chromium-browser',
-    '/usr/bin/google-chrome',
-    '/nix/var/nix/profiles/default/bin/chromium',
-  ].filter(Boolean);
-  
-  const fs = require('fs');
-  for (const p of candidates) {
-    try { if (fs.existsSync(p)) return p; } catch {}
+  // Map round labels to standard names
+  function mapRound(r) {
+    const m = r.match(/^Round (\d+)$/);
+    if (m) return `Table of ${m[1]}`;
+    if (r === 'Quarter Finals') return 'Quarter Final';
+    if (r === 'Semi Finals')    return 'Semi Final';
+    if (r === 'Finals')         return 'Final';
+    return r;
   }
-  return null;
-}
 
-// Shared browser instance — launch once, reuse across all scrapes
-// This avoids spawning multiple Chromium processes and hitting memory limits
-let _sharedBrowser = null;
-let _sharedBrowserPath = null;
+  const bouts = [];
+  const seen  = new Set();
 
-async function getSharedBrowser() {
-  const chromiumPath = findChromium();
-  if (!chromiumPath) return null;
+  items.forEach((item, i) => {
+    if (!item.text.toUpperCase().includes(surnameUpper)) return;
 
-  // Always launch fresh — shared browser was crashing
-  // Use minimal flags for Railway's sandboxed environment
-  const { chromium } = require('playwright-core');
-  const browser = await chromium.launch({
-    executablePath: chromiumPath,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-gpu',
-      '--disable-dev-shm-usage',
-      '--disable-extensions',
-      '--no-first-run',
-    ],
-    headless: true,
-    timeout: 30000,
-  });
-  return browser;
-}
+    const nextCls  = items[i + 1]?.cls || '';
+    const isBottom = nextCls.includes('bb-score-row-bottom') && !nextCls.includes('second');
+    const isTop    = nextCls.includes('bb-score-row-top')    && !nextCls.includes('second');
+    if (!isBottom && !isTop) return;
 
-async function scrapePool(eventGUID, poolGUID, surname) {
-  // Pure HTTP approach — no Playwright needed
-  // 1. Fetch pool page to get var ids = [...] (pool sub-GUIDs in raw HTML)
-  // 2. Fetch each ?dbut=true endpoint → parse pool table with cheerio
-  try {
-    const poolPageUrl = `${FTL}/pools/scores/${eventGUID}/${poolGUID}`;
-    const pageRes = await axios.get(poolPageUrl, { headers: HEADERS_HTML, timeout: 15000 });
-    const pageHtml = pageRes.data;
+    const ourScore = parseInt(items[i + 1]?.text);
+    if (isNaN(ourScore)) return;
 
-    // Extract pool sub-GUIDs from inline JS: var ids = ["GUID1","GUID2",...]
-    const idsMatch = pageHtml.match(/var ids = \[([\s\S]*?)\];/);
-    const subGuids = idsMatch ? [...idsMatch[1].matchAll(/([A-F0-9]{32})/gi)].map(m => m[1]) : [];
+    let oppName = '', oppScore = NaN;
 
-    if (subGuids.length === 0) {
-      console.warn(`      No pool sub-GUIDs found for pool ${poolGUID}`);
-      return [];
-    }
-
-    const surnameUpper = surname.toUpperCase();
-    const bouts = [];
-
-    // Try each sub-GUID until we find the one with our fencer
-    for (const subGuid of subGuids) {
-      const boutUrl = `${FTL}/pools/scores/${eventGUID}/${poolGUID}/${subGuid}?dbut=true`;
-      const boutRes = await axios.get(boutUrl, { headers: HEADERS_HTML, timeout: 10000 });
-      const boutHtml = boutRes.data;
-
-      if (!boutHtml.toUpperCase().includes(surnameUpper)) continue;
-
-      // Parse with cheerio
-      const $ = cheerio.load(boutHtml);
-      const dataRows = [];
-
-      $('table tr').each((_, row) => {
-        const cells = $(row).find('td');
-        if (cells.length >= 8) dataRows.push(cells);
-      });
-
-      if (dataRows.length < 2) continue;
-
-      // Build fencer list
-      const fencers = dataRows.map(cells => ({
-        name: $(cells[0]).text().trim().split('\n')[0].trim(),
-        cells,
-      }));
-
-      const ourIdx = fencers.findIndex(f => f.name.toUpperCase().includes(surnameUpper));
-      if (ourIdx === -1) continue;
-
-      const ourCells = fencers[ourIdx].cells;
-
-      fencers.forEach((opp, oppIdx) => {
-        if (oppIdx === ourIdx) return;
-
-        // Pool table columns: [0]=name [1]=seed [2..N+1]=scores vs each fencer
-        // Column for score vs fencer at position j is: 2 + j (if j < ourIdx)
-        // or 2 + j + 1 (if j > ourIdx) because the self-cell is blank at 2+ourIdx
-        // For OUR row vs opponent at oppIdx:
-        const ourCol = oppIdx < ourIdx ? 2 + oppIdx : 2 + oppIdx + 1;
-        // For OPPONENT row vs us (ourIdx):
-        const oppCol = ourIdx < oppIdx ? 2 + ourIdx : 2 + ourIdx + 1;
-
-        const txt = $(ourCells[ourCol]).text().trim();
-        if (!txt) return;
-
-        const isWin    = txt.startsWith('V');
-        const ourScore = parseInt(txt.replace(/[VD]/g, '')) || 0;
-        const oppTxt   = $(opp.cells[oppCol]).text().trim();
-        const oppScore = parseInt(oppTxt.replace(/[VD]/g, '')) || 0;
-
-        // Format: "SURNAME First" → "First Surname"
-        const parts   = opp.name.split(' ');
-        const fmtName = parts.length > 1
-          ? parts.slice(1).join(' ') + ' ' + parts[0][0] + parts[0].slice(1).toLowerCase()
-          : opp.name;
-
-        bouts.push({
-          opponent:     fmtName,
-          scoreFor:     ourScore,
-          scoreAgainst: oppScore,
-          result:       isWin ? 'Won' : 'Lost',
-          type:         'Poule',
-        });
-      });
-
-      break; // Found our pool — no need to check others
-    }
-
-    return bouts;
-  } catch (err) {
-    console.warn(`      Pool scrape failed: ${err.message}`);
-    return [];
-  }
-}
-
-
-async function scrapeTableau(eventGUID, tableauGUID, surname) {
-  // Pure HTTP approach — uses /trees and /trees/{guid}/tables/{n}/{count} endpoints
-  try {
-    const surnameUpper = surname.toUpperCase();
-    const bouts = [];
-
-    // Step 1: get trees (bracket divisions)
-    const treesUrl = `${FTL}/tableaus/scores/${eventGUID}/${tableauGUID}/trees`;
-    const treesRes = await axios.get(treesUrl, { headers: HEADERS_HTML, timeout: 10000 });
-    const trees = treesRes.data;
-    if (!Array.isArray(trees) || trees.length === 0) return [];
-
-    const roundNames = [
-      'Table of 128','Table of 64','Table of 32','Table of 16',
-      'Quarter-Final','Semi-Final','Final'
-    ];
-
-    // Helper: extract clean "First Surname" from raw FTL name string
-    // FTL format: "(N) SURNAME FirstnameClubName" — club concatenated with no space
-    function extractName(raw) {
-      const s = raw.replace(/^\(\d+\)\s*/, '').trim();
-      // Match: ALL_CAPS surname(s), then Firstname (Capital + lowercase), stop before club
-      const m = s.match(/^((?:[A-Z][A-Z\s\-'\/]+\s+)*[A-Z]+(?:\s+[A-Z]+)*)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/);
-      if (!m) return null;
-      const sur = m[1].trim();
-      const first = m[2].trim();
-      return `${first} ${sur[0]}${sur.slice(1).toLowerCase()}`;
-    }
-
-    for (const tree of trees) {
-      for (let tableNum = 0; tableNum < (tree.numTables || 0); tableNum++) {
-        const tableUrl = `${FTL}/tableaus/scores/${eventGUID}/${tableauGUID}/trees/${tree.guid}/tables/${tableNum}/4`;
-        const tableRes = await axios.get(tableUrl, { headers: HEADERS_HTML, timeout: 10000 });
-        const html = tableRes.data;
-
-        if (!html.toUpperCase().includes(surnameUpper)) continue;
-
-        const $ = cheerio.load(html);
-        const roundName = roundNames[tableNum] || `Round ${tableNum + 1}`;
-
-        const seenBouts = new Set(); // dedup across table pages
-        const rows = $('tr').toArray().map(r => ({
-          text: $(r).text().trim(),
-        }));
-
-        rows.forEach((row, i) => {
-          const { text } = row;
-          // Strip "Strip N" from text before matching scores to avoid
-          // concatenation like "10 - 7Strip 12" being parsed as "10 - 712"
-          const cleanText = text.replace(/Strip\s*\d+/gi, '').replace(/\s+/g, ' ');
-          const scoreMatch = cleanText.match(/(\d+)\s*-\s*(\d+)/);
-          if (!scoreMatch) return;
-          if (text.includes('BYE')) return;
-
-          const s1 = Math.min(parseInt(scoreMatch[1]), 99); // sanity cap
-          const s2 = Math.min(parseInt(scoreMatch[2]), 99);
-          // Validate: DE scores are always 0-15, skip obvious junk
-          if (s1 > 20 || s2 > 20) return;
-          const hasOurFencer = text.toUpperCase().includes(surnameUpper);
-
-          // Extract winner name from this result row
-          const nameRaw = cleanText.replace(/^\(\d+\)\s*/, '').replace(/\s*\d+\s*-\s*\d+[\s\S]*$/, '').trim();
-          const winnerName = extractName(nameRaw);
-
-          // FTL result rows show: LOSER_NAME  WINNER_SCORE - LOSER_SCORE
-          // So: our fencer in result row = they LOST (s1=winner/opp score, s2=our score)
-          //     our fencer in nearby row without score = they WON (s1=our score, s2=opp score)
-
-          if (hasOurFencer) {
-            // Our fencer is in the result row — they LOST
-            for (const offset of [-2, -1, 1, 2]) {
-              const oRow = rows[i + offset];
-              if (!oRow) continue;
-              const ot = oRow.text;
-              if (!ot || ot.includes('BYE') || /\d+\s*-\s*\d+/.test(ot)) continue;
-              if (ot.toUpperCase().includes(surnameUpper)) continue; // skip self
-              const oppName = extractName(ot.replace(/^\(\d+\)\s*/, '').trim());
-              if (!oppName || oppName.length < 3) continue;
-              const key = `${roundName}|${oppName}`;
-              if (seenBouts.has(key)) break;
-              seenBouts.add(key);
-              bouts.push({ opponent: oppName, scoreFor: s2, scoreAgainst: s1, result: 'Lost', type: `DE ${roundName}` });
-              break;
-            }
-          } else {
-            // Someone else is in the result row — our fencer nearby without score = they WON
-            for (const offset of [-2, -1, 1, 2]) {
-              const oRow = rows[i + offset];
-              if (!oRow) continue;
-              const ot = oRow.text;
-              if (!ot.toUpperCase().includes(surnameUpper)) continue;
-              if (/\d+\s*-\s*\d+/.test(ot)) continue; // skip if also has score
-              if (!winnerName || winnerName.length < 3) continue;
-              const key = `${roundName}|${winnerName}`;
-              if (seenBouts.has(key)) break;
-              seenBouts.add(key);
-              bouts.push({ opponent: winnerName, scoreFor: s1, scoreAgainst: s2, result: 'Won', type: `DE ${roundName}` });
-              break;
-            }
+    if (isBottom) {
+      // Scan BACKWARD for the nearest bb-score-row-top score
+      for (let j = i - 1; j >= 0; j--) {
+        if (items[j].cls.includes('bb-score-row-top') && !items[j].cls.includes('second')) {
+          oppScore = parseInt(items[j].text);
+          for (let k = j - 1; k >= 0; k--) {
+            if (!items[k].cls || items[k].cls === '') { oppName = items[k].text; break; }
           }
-        });
-
-        // Continue scanning all tables — bouts are spread across table pages
+          break;
+        }
+      }
+    } else {
+      // Scan FORWARD for the next bb-score-row-bottom score
+      for (let j = i + 2; j < items.length; j++) {
+        if (items[j].cls.includes('bb-score-row-bottom') && !items[j].cls.includes('second')) {
+          oppScore = parseInt(items[j].text);
+          for (let k = j - 1; k > i; k--) {
+            if (!items[k].cls || items[k].cls === '') { oppName = items[k].text; break; }
+          }
+          break;
+        }
       }
     }
 
-    return bouts;
-  } catch (err) {
-    console.warn(`      Tableau scrape failed: ${err.message}`);
-    return [];
-  }
+    if (isNaN(oppScore) || !oppName || oppName.includes('BYE') || oppName.includes('- BYE')) return;
+
+    const round  = mapRound(item.round);
+    const oppFmt = formatName(oppName);
+    const key    = `${round}|${oppFmt}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+
+    const result = ourScore > oppScore ? 'Won' : ourScore < oppScore ? 'Lost' : 'Draw';
+    bouts.push({ opponent: oppFmt, scoreFor: ourScore, scoreAgainst: oppScore, result, type: `DE ${round}` });
+  });
+
+  return bouts;
 }
 
+// ── Save to Supabase ─────────────────────────────────────────────────────────
 
 async function saveScrapedData(fencerId, scrapedResults) {
   let boutsAdded = 0;
@@ -579,320 +301,293 @@ async function saveScrapedData(fencerId, scrapedResults) {
       .from('competitions')
       .upsert({
         fencer_id:      fencerId,
-        ukr_tourney_id: comp.ukrTourneyId || comp.ftlEventGUID,
-        name:           comp.name,
+        ukr_tourney_id: comp.ukrTourneyId,
+        name:           comp.tourneyName,
         event_name:     comp.eventName || null,
-        date:           comp.date || null,
-        rank:           comp.rank || null,
+        date:           comp.date      || null,
+        rank:           comp.rank      || null,
         field_size:     comp.fieldSize || null,
-        source:         comp.ftlEventGUID ? 'ftl' : 'ukratings',
-      }, { onConflict: 'fencer_id,ukr_tourney_id' })
+        source:         'ukratings',
+      }, { onConflict: 'fencer_id,ukr_tourney_id', ignoreDuplicates: false })
       .select()
       .single();
 
     if (compErr || !savedComp) {
-      console.warn(`  Could not save comp "${comp.name}":`, compErr?.message);
+      console.warn(`    Failed to save competition ${comp.tourneyName}: ${compErr?.message}`);
       continue;
     }
 
     const allBouts = [...(comp.poolBouts || []), ...(comp.deBouts || [])];
     for (const bout of allBouts) {
-      if (!bout.opponent || bout.opponent === 'BYE') continue;
+      if (!bout.opponent || bout.opponent.includes('BYE')) continue;
       const { error } = await supabase.from('bouts').upsert({
-        fencer_id:      fencerId,
+        fencer_id:     fencerId,
         competition_id: savedComp.id,
-        date:           savedComp.date || null,
-        opponent:       bout.opponent,
-        score_for:      bout.scoreFor,
-        score_against:  bout.scoreAgainst,
-        result:         bout.result,
-        bout_type:      bout.type,
-        source:         savedComp.source,
-      }, { onConflict: 'fencer_id,competition_id,opponent,bout_type' });
-
-      if (error) {
-        console.warn(`    Bout save error (${bout.opponent}): ${error.message}`);
-      } else {
-        boutsAdded++;
-      }
+        date:          savedComp.date || null,
+        opponent:      bout.opponent,
+        score_for:     bout.scoreFor,
+        score_against: bout.scoreAgainst,
+        result:        bout.result,
+        bout_type:     bout.type,
+        source:        'ukratings',
+      }, { onConflict: 'fencer_id,competition_id,opponent,bout_type', ignoreDuplicates: true });
+      if (!error) boutsAdded++;
     }
   }
 
-  await supabase.from('scrape_log').insert({
-    fencer_id:           fencerId,
-    status:              scrapedResults.errors?.length ? 'partial' : 'success',
-    sync_type:           scrapedResults.syncMode || 'manual',
-    from_date:           scrapedResults.lastSyncDate || null,
-    bouts_added:         boutsAdded,
-    tournaments_checked: scrapedResults.tournamentsChecked || 0,
-    events_checked:      scrapedResults.eventsChecked || 0,
-    error_msg:           (scrapedResults.errors || []).slice(0,5).join('; ') || null,
-  });
-
-  const fencerUpdate = { last_sync: new Date().toISOString() };
-  if (!scrapedResults.syncMode || scrapedResults.syncMode === 'full') {
-    fencerUpdate.last_full_sync = new Date().toISOString();
-  }
-  await supabase.from('fencers').update(fencerUpdate).eq('id', fencerId);
-
-  console.log(`Saved ${boutsAdded} bouts for fencer ${fencerId}`);
   return boutsAdded;
 }
 
-// Save results from scrapeFromFTLUrl (multi-fencer)
-async function saveManualTournamentData(scrapeResults) {
-  let total = 0;
-  for (const [fencerId, data] of Object.entries(scrapeResults)) {
-    const saved = await saveScrapedData(fencerId, {
-      competitions:        data.competitions,
-      errors:              data.errors,
-      syncMode:            'manual',
-      tournamentsChecked:  1,
-      eventsChecked:       data.competitions.length,
-    });
-    total += saved;
-  }
-  return total;
-}
+// ── Main scraper ──────────────────────────────────────────────────────────────
 
-function parseDate(str) {
-  try {
-    const d = new Date(str);
-    return isNaN(d) ? null : d.toISOString().slice(0, 10);
-  } catch { return null; }
-}
-
-
-// ═══════════════════════════════════════════════════════════════
-// Main orchestration — runs all steps for a fencer
-// Processes tournaments in parallel (batches of 5) for speed
-// ═══════════════════════════════════════════════════════════════
 async function scrapeFencer(fencer) {
-  const { ukr_id, name, weapon_id = '34' } = fencer;
-  // Name format on UKRatings: "SURNAME FirstName" (surname is first word, all caps)
-  // But FTL uses: "SURNAME FirstName" too
-  // Split: first word = surname, rest = first name
-  const nameParts = name.trim().split(/\s+/);
-  const surname   = nameParts[0];
-  const firstName = nameParts.slice(1).join(' ');
+  const { ukr_id, name } = fencer;
+  const surname = name.trim().split(/\s+/)[0];
 
-  console.log(`
-Scraping ${name} via UKRatings → FTL (full)`);
+  console.log(`\nScraping ${name} via UKRatings v6`);
 
-  // Step 1: Get all tournaments from UKRatings
-  const ukrComps = await getUKRTournaments(ukr_id, weapon_id);
-  const results = {
-    competitions: [],
-    tournamentsChecked: ukrComps.length,
-    eventsChecked: 0,
-    syncMode: 'full',
-    errors: [],
-  };
+  const results = { competitions: [], tournamentsChecked: 0, errors: [] };
 
-  if (!ukrComps.length) return results;
+  let competitions;
+  try {
+    competitions = await getCompetitionList(ukr_id);
+    console.log(`  Found ${competitions.length} competitions`);
+  } catch (err) {
+    console.warn(`  Failed to get competition list: ${err.message}`);
+    return results;
+  }
 
-  // Deduplicate by ukrTourneyId
-  const seen = new Set();
-  const unique = ukrComps.filter(c => {
-    if (seen.has(c.ukrTourneyId)) return false;
-    seen.add(c.ukrTourneyId);
-    return true;
-  });
-
-  // Process tournaments in parallel batches of 5
   const BATCH = 5;
-  for (let i = 0; i < unique.length; i += BATCH) {
-    const batch = unique.slice(i, i + BATCH);
-
-    const batchResults = await Promise.all(batch.map(async (comp) => {
+  for (let i = 0; i < competitions.length; i += BATCH) {
+    const batch = competitions.slice(i, i + BATCH);
+    const batchResults = await Promise.all(batch.map(async comp => {
       try {
-        console.log(`  → ${comp.name}`);
+        results.tournamentsChecked++;
+        console.log(`  → ${comp.tourneyName} / ${comp.eventName}`);
 
-        // Step 2: Get FTL tournament GUID
-        const ftlInfo = await getFTLUrlFromUKR(comp.ukrTourneyId);
-        console.log(`    FTL info for ${comp.ukrTourneyId}: ${ftlInfo ? ftlInfo.ftlTournamentGUID : 'NOT FOUND'}`);
-        if (!ftlInfo) {
-          console.log(`    No FTL link found — skipping`);
-          // Still save the competition from UKRatings data (rank/field_size)
+        const eventFinalResultsId = await getEventFinalResultsId(comp.ukrTourneyId, comp.eventName);
+        if (!eventFinalResultsId) {
+          console.log(`    No event results page found — skipping`);
           return { ...comp, poolBouts: [], deBouts: [] };
         }
 
-        // Step 3: Get event GUIDs from FTL schedule
-        const { guids: eventGUIDs, tourneyDate } = await getFTLEventGUIDs(ftlInfo.ftlTournamentGUID);
-        results.eventsChecked += eventGUIDs.length;
-        console.log(`    FTL event GUIDs found: ${eventGUIDs.length}${tourneyDate ? ' date:'+tourneyDate : ''}`);
+        const { date, poolIds, elimId } = await getEventDetails(eventFinalResultsId);
+        comp.date = date;
+        console.log(`    Date: ${date || '?'}, Pools: ${poolIds.length}, Elim: ${elimId ? 'yes' : 'no'}`);
 
-        if (!eventGUIDs.length) {
-          console.log(`    No events found on FTL schedule`);
-          return { ...comp, poolBouts: [], deBouts: [], ftlTournamentGUID: ftlInfo.ftlTournamentGUID };
-        }
-
-        // Step 4: Find fencer in one of the events
-        let matchedEvent = null;
-        for (const eventGUID of eventGUIDs) {
-          const match = await searchFTLEventForFencer(eventGUID, surname, firstName);
-          if (match) {
-            matchedEvent = { eventGUID, ...match };
-            break;
-          }
-        }
-
-        if (!matchedEvent) {
-          console.log(`    Fencer not found in any of ${eventGUIDs.length} FTL events`);
-          // Still save the comp if it has rank/fieldSize from UKRatings
-          if (comp.rank || comp.fieldSize) {
-            return { ...comp, poolBouts: [], deBouts: [], ftlTournamentGUID: ftlInfo.ftlTournamentGUID };
-          }
-          return null; // Skip entirely if no useful data
-        }
-
-        const { eventGUID, poolGUIDs = [], tableauGUIDs = [], place, fieldSize, eventName } = matchedEvent;
-        console.log(`    Matched: ${poolGUIDs.length} pools, ${tableauGUIDs.length} tableaux`);
-
-        // Step 5: Scrape pool + tableau bouts IN PARALLEL
-        const [poolBoutsArrays, deBoutsArrays] = await Promise.all([
-          Promise.all((poolGUIDs || []).map(g => scrapePool(eventGUID, g, surname).catch(() => []))),
-          Promise.all((tableauGUIDs || []).map(g => scrapeTableau(eventGUID, g, surname).catch(() => []))),
-        ]);
-
-        const poolBouts = poolBoutsArrays.flat();
-        const deBouts   = deBoutsArrays.flat();
+        const poolBouts = (await Promise.all(poolIds.map(id => scrapePoolBouts(id, surname).catch(() => [])))).flat();
+        const deBouts   = elimId ? await scrapeElimBouts(elimId, surname).catch(() => []) : [];
 
         console.log(`    ✓ ${poolBouts.length} pool + ${deBouts.length} DE bouts`);
+        return { ...comp, poolBouts, deBouts };
 
-        return {
-          ...comp,
-          ftlEventGUID:      eventGUID,
-          ftlTournamentGUID: ftlInfo.ftlTournamentGUID,
-          eventName:         eventName || comp.eventName,
-          rank:              place    || comp.rank,
-          fieldSize:         fieldSize || comp.fieldSize,
-          date:              tourneyDate || comp.date || null,
-          poolBouts,
-          deBouts,
-        };
       } catch (err) {
-        console.warn(`    Error processing ${comp.name}: ${err.message}`);
-        results.errors.push(`${comp.name}: ${err.message}`);
+        console.warn(`    Error: ${err.message}`);
+        results.errors.push(`${comp.tourneyName}: ${err.message}`);
         return { ...comp, poolBouts: [], deBouts: [] };
       }
     }));
-
-    results.competitions.push(...batchResults.filter(Boolean));
+    results.competitions.push(...batchResults);
+    if (i + BATCH < competitions.length) await sleep(300);
   }
 
   return results;
 }
 
-// ═══════════════════════════════════════════════════════════════
-// Manual tournament scrape — given a FTL URL, finds fencer(s)
-// Used by the "Add Tournament" tab for non-UK events
-// Returns: { [fencerId]: { competitions, errors } }
-// ═══════════════════════════════════════════════════════════════
-async function scrapeFromFTLUrl(ftlUrl, { coachMode, allFencers, fencerId, fencerName } = {}) {
-  const results = {};
+// ── Public API ────────────────────────────────────────────────────────────────
 
-  // Extract event GUID from URL
-  // Formats: /events/view/{GUID} or /tournaments/eventSchedule/{GUID}
-  let eventGUID = null;
-  let tournamentGUID = null;
+async function syncFencer(fencerId, options = {}) {
+  const { data: fencer } = await supabase.from('fencers').select('*').eq('id', fencerId).single();
+  if (!fencer) throw new Error(`Fencer ${fencerId} not found`);
 
-  const eventMatch  = ftlUrl.match(/\/events\/(?:view|results)\/([A-F0-9]{32})/i);
+  const now = new Date().toISOString();
+  await supabase.from('scrape_log').insert({ fencer_id: fencerId, sync_type: 'full', started_at: now, status: 'running' });
+
+  try {
+    const scrapedResults = await scrapeFencer(fencer);
+    const boutsAdded     = await saveScrapedData(fencerId, scrapedResults);
+
+    console.log(`\nSaved ${boutsAdded} bouts for fencer ${fencerId}`);
+    await supabase.from('fencers').update({ last_sync: now, last_full_sync: now }).eq('id', fencerId);
+    await supabase.from('scrape_log')
+      .update({ status: 'complete', completed_at: new Date().toISOString(), tournaments_checked: scrapedResults.tournamentsChecked, bouts_added: boutsAdded })
+      .eq('fencer_id', fencerId).eq('status', 'running');
+
+    return { success: true, boutsAdded, errors: scrapedResults.errors };
+  } catch (err) {
+    await supabase.from('scrape_log')
+      .update({ status: 'error', error: err.message, completed_at: new Date().toISOString() })
+      .eq('fencer_id', fencerId).eq('status', 'running');
+    throw err;
+  }
+}
+
+// ── Manual FTL URL scrape (Add Tournament feature) ───────────────────────────
+
+async function scrapeFromFTLUrl(ftlUrl, fencerId, coachMode = false) {
+  console.log(`\nscrapeFromFTLUrl: ${ftlUrl}`);
+  const results = { competitions: [], errors: [] };
+
+  const { data: allFencers } = coachMode
+    ? await supabase.from('fencers').select('*')
+    : await supabase.from('fencers').select('*').eq('id', fencerId);
+  if (!allFencers?.length) return results;
+
+  const eventMatch = ftlUrl.match(/\/events\/(?:results|view)\/([A-F0-9]{32})/i);
   const schedMatch  = ftlUrl.match(/\/tournaments\/eventSchedule\/([A-F0-9]{32})/i);
+
+  let eventGUID = null, tourneyDate = null;
 
   if (eventMatch) {
     eventGUID = eventMatch[1].toUpperCase();
   } else if (schedMatch) {
-    tournamentGUID = schedMatch[1].toUpperCase();
-    // Get event GUIDs from schedule
-    const { guids, tourneyDate: ftlDate } = await getFTLEventGUIDs(tournamentGUID);
-    if (guids.length > 0) eventGUID = guids[0]; // use first event
+    const tGUID    = schedMatch[1].toUpperCase();
+    const schedHtml = await fetchHTML(`${FTL}/tournaments/eventSchedule/${tGUID}`).catch(() => '');
+    const dm = schedHtml.match(/(?:Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday)\s+(\w+\s+\d{1,2},\s+\d{4})|(\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4})/i);
+    if (dm) { const d = new Date((dm[1]||dm[2]).trim()); if (!isNaN(d)) tourneyDate = d.toISOString().slice(0,10); }
+    const guids = [...new Set([
+      ...[...schedHtml.matchAll(/data-href="\/events\/(?:view|results)\/([A-F0-9]{32})"/gi)].map(m=>m[1].toUpperCase()),
+      ...[...schedHtml.matchAll(/href="\/events\/(?:view|results)\/([A-F0-9]{32})"/gi)].map(m=>m[1].toUpperCase()),
+    ])];
+    if (guids.length) eventGUID = guids[0];
   }
 
-  if (!eventGUID) {
-    console.warn('scrapeFromFTLUrl: could not extract event GUID from URL', ftlUrl);
-    return results;
-  }
+  if (!eventGUID) { console.warn('Could not extract event GUID'); return results; }
 
-  // Get all fencers in the event
-  const eventDataUrl = `${FTL}/events/results/data/${eventGUID}`;
-  const eventData = await fetchJSON(eventDataUrl);
+  const eventData      = await fetchJSON(`${FTL}/events/results/data/${eventGUID}`);
   const allEventFencers = Object.values(eventData || {});
+  const evHtml         = await fetchHTML(`${FTL}/events/results/${eventGUID}`).catch(() => '');
+  const $ev            = cheerio.load(evHtml);
+  const eventName      = $ev('title').text().trim() || 'Unknown Event';
+  const poolGUIDs = [], tabGUIDs = [];
+  $ev('a[href*="/pools/scores/"]').each((_,a)=>{ const m=$ev(a).attr('href')?.match(/\/pools\/scores\/[A-F0-9]{32}\/([A-F0-9]{32})/i); if(m&&!poolGUIDs.includes(m[1].toUpperCase()))poolGUIDs.push(m[1].toUpperCase()); });
+  $ev('a[href*="/tableaus/scores/"]').each((_,a)=>{ const m=$ev(a).attr('href')?.match(/\/tableaus\/scores\/[A-F0-9]{32}\/([A-F0-9]{32})/i); if(m&&!tabGUIDs.includes(m[1].toUpperCase()))tabGUIDs.push(m[1].toUpperCase()); });
 
-  // Determine which fencers to scrape
-  let fencersToScrape = [];
+  for (const fencer of allFencers) {
+    const [surname] = fencer.name.split(' ');
+    const match = allEventFencers.find(ef => ef.search?.toUpperCase().includes(surname.toUpperCase()));
+    if (!match) continue;
 
-  if (coachMode && allFencers) {
-    // Coach mode: find all club fencers in this event
-    fencersToScrape = allFencers.map(f => {
-      const [surname] = f.name.split(' ');
-      const match = allEventFencers.find(ef =>
-        ef.search && ef.search.toUpperCase().includes(surname.toUpperCase())
-      );
-      return match ? { ...f, ftlFencer: match } : null;
-    }).filter(Boolean);
-  } else if (fencerName) {
-    // Single fencer mode
-    const [surname] = fencerName.split(' ');
-    const match = allEventFencers.find(ef =>
-      ef.search && ef.search.toUpperCase().includes(surname.toUpperCase())
-    );
-    if (match) {
-      fencersToScrape = [{ id: fencerId, name: fencerName, ftlFencer: match }];
-    }
-  }
-
-  if (!fencersToScrape.length) {
-    console.warn('scrapeFromFTLUrl: no matching fencers found in event', eventGUID);
-    return results;
-  }
-
-  // Get pool and tableau GUIDs for this event
-  const eventResultsHtml = await fetchHTML(`${FTL}/events/results/${eventGUID}`);
-  const $ = require('cheerio').load(eventResultsHtml);
-
-  const poolGUIDs = [];
-  const tableauGUIDs = [];
-
-  $('a[href*="/pools/scores/"]').each((_, a) => {
-    const m = $(a).attr('href').match(/\/pools\/scores\/[A-F0-9]{32}\/([A-F0-9]{32})/i);
-    if (m && !poolGUIDs.includes(m[1].toUpperCase())) poolGUIDs.push(m[1].toUpperCase());
-  });
-  $('a[href*="/tableaus/scores/"]').each((_, a) => {
-    const m = $(a).attr('href').match(/\/tableaus\/scores\/[A-F0-9]{32}\/([A-F0-9]{32})/i);
-    if (m && !tableauGUIDs.includes(m[1].toUpperCase())) tableauGUIDs.push(m[1].toUpperCase());
-  });
-
-  // Scrape each fencer
-  for (const f of fencersToScrape) {
-    const [surname] = f.name.split(' ');
-    const errors = [];
-
-    const [poolBoutsArrays, deBoutsArrays] = await Promise.all([
-      Promise.all(poolGUIDs.map(g => scrapePool(eventGUID, g, surname).catch(e => { errors.push(e.message); return []; }))),
-      Promise.all(tableauGUIDs.map(g => scrapeTableau(eventGUID, g, surname).catch(e => { errors.push(e.message); return []; }))),
-    ]);
-
-    const poolBouts = poolBoutsArrays.flat();
-    const deBouts   = deBoutsArrays.flat();
+    const poolBouts = (await Promise.all(poolGUIDs.map(g => scrapeFTLPool(eventGUID, g, surname).catch(() => [])))).flat();
+    const deBouts   = (await Promise.all(tabGUIDs.map(g => scrapeFTLTableau(eventGUID, g, surname).catch(() => [])))).flat();
 
     const comp = {
-      name:          `${f.ftlFencer?.name || f.name} — Manual`,
-      ftlEventGUID:  eventGUID,
-      ukrTourneyId:  `manual_${eventGUID}`,
-      rank:          parseInt(f.ftlFencer?.place) || null,
-      fieldSize:     allEventFencers.length || null,
-      source:        'manual',
+      ukrTourneyId: eventGUID,
+      tourneyName:  eventName,
+      eventName:    null,
+      date:         tourneyDate,
+      rank:         parseInt(match.place) || null,
+      fieldSize:    allEventFencers.filter(f => !f.excluded).length,
       poolBouts,
       deBouts,
     };
 
-    results[f.id] = { competitions: [comp], errors };
-    console.log(`  ${f.name}: ${poolBouts.length} pool + ${deBouts.length} DE bouts`);
+    await saveScrapedData(fencer.id, { competitions: [comp] });
+    console.log(`  ${fencer.name}: ${poolBouts.length} pool + ${deBouts.length} DE`);
+    results.competitions.push(comp);
   }
 
   return results;
 }
 
+// ── FTL pool (manual Add Tournament only) ────────────────────────────────────
 
-module.exports = { scrapeFencer, saveScrapedData, scrapeFromFTLUrl, saveManualTournamentData };
+async function scrapeFTLPool(eventGUID, poolGUID, surname) {
+  const pageUrl  = `${FTL}/pools/scores/${eventGUID}/${poolGUID}`;
+  const pageHtml = await fetchHTML(pageUrl);
+  const idsMatch = pageHtml.match(/var ids = \[([\s\S]*?)\]/);
+  const subGuids = idsMatch ? [...idsMatch[1].matchAll(/([A-F0-9]{32})/gi)].map(m=>m[1]) : [];
+  const surnameU = surname.toUpperCase();
+  const bouts    = [];
+
+  for (const sg of subGuids) {
+    const html = await axios.get(`${pageUrl}/${sg}?dbut=true`, { headers: HEADERS, timeout: 10000 }).then(r=>r.data).catch(()=>'');
+    if (!html.toUpperCase().includes(surnameU)) continue;
+    const $ = cheerio.load(html);
+    const dataRows = [];
+    $('table tr').each((_,row) => { if ($(row).find('td').length >= 8) dataRows.push($(row).find('td')); });
+    const fencers = dataRows.map(cells => ({ name: $(cells[0]).text().trim().split('\n')[0].trim(), cells }));
+    const ourIdx  = fencers.findIndex(f => f.name.toUpperCase().includes(surnameU));
+    if (ourIdx === -1) continue;
+    const ourCells = fencers[ourIdx].cells;
+    fencers.forEach((opp, oppIdx) => {
+      if (oppIdx === ourIdx) return;
+      const txt = $(ourCells[2 + oppIdx]).text().trim();
+      if (!txt) return;
+      const isWin = txt.startsWith('V');
+      const sf    = parseInt(txt.replace(/[VD]/g,'')) || 0;
+      const oppTxt = $(opp.cells[2 + ourIdx]).text().trim();
+      const sa    = parseInt(oppTxt.replace(/[VD]/g,'')) || 0;
+      const parts = opp.name.split(' ');
+      const fmt   = parts.length > 1 ? `${parts.slice(1).join(' ')} ${parts[0][0]}${parts[0].slice(1).toLowerCase()}` : opp.name;
+      bouts.push({ opponent: fmt, scoreFor: sf, scoreAgainst: sa, result: isWin ? 'Won' : 'Lost', type: 'Poule' });
+    });
+    break;
+  }
+  return bouts;
+}
+
+// ── FTL tableau (manual Add Tournament only) ──────────────────────────────────
+
+async function scrapeFTLTableau(eventGUID, tableauGUID, surname) {
+  const surnameUpper = surname.toUpperCase();
+  const bouts = [], seenBouts = new Set();
+  const trees = await fetchJSON(`${FTL}/tableaus/scores/${eventGUID}/${tableauGUID}/trees`);
+  if (!Array.isArray(trees) || !trees.length) return [];
+  const roundNames = ['Table of 128','Table of 64','Table of 32','Table of 16','Quarter-Final','Semi-Final','Final'];
+
+  function extractName(raw) {
+    const s = raw.replace(/^\(\d+\)\s*/, '').trim();
+    const m = s.match(/^((?:[A-Z][A-Z\s\-'\/]+\s+)*[A-Z]+(?:\s+[A-Z]+)*)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/);
+    return m ? `${m[2].trim()} ${m[1][0]}${m[1].slice(1).toLowerCase()}` : s.replace(/Strip\s*\d+.*/gi,'').trim();
+  }
+
+  for (const tree of trees) {
+    for (let t = 0; t < (tree.numTables||0); t++) {
+      const html = await axios.get(`${FTL}/tableaus/scores/${eventGUID}/${tableauGUID}/trees/${tree.guid}/tables/${t}/4`, { headers: HEADERS, timeout: 10000 }).then(r=>r.data).catch(()=>'');
+      if (!html.toUpperCase().includes(surnameUpper)) continue;
+      const roundName = roundNames[t] || `Round ${t+1}`;
+      const $ = cheerio.load(html);
+      const rows = $('tr').toArray().map(r => ({ text: $(r).text().trim() }));
+      rows.forEach((row, i) => {
+        const clean = row.text.replace(/Strip\s*\d+/gi,'');
+        const sm = clean.match(/(\d+)\s*-\s*(\d+)/);
+        if (!sm || row.text.includes('BYE')) return;
+        const s1 = parseInt(sm[1]), s2 = parseInt(sm[2]);
+        if (s1 > 20 || s2 > 20) return;
+        const hasUs = row.text.toUpperCase().includes(surnameUpper);
+        const nameRaw = row.text.replace(/^\(\d+\)\s*/,'').replace(/\s*\d+\s*-\s*\d+[\s\S]*$/,'').trim();
+        const winnerName = extractName(nameRaw);
+        if (hasUs) {
+          for (const off of [-2,-1,1,2]) {
+            const o = rows[i+off]; if(!o) continue;
+            if(!o.text||o.text.includes('BYE')||/\d+-\d+/.test(o.text)) continue;
+            if(o.text.toUpperCase().includes(surnameUpper)) continue;
+            const oppName = extractName(o.text.replace(/^\(\d+\)\s*/,'').trim());
+            if(!oppName||oppName.length<3) continue;
+            const key = `${roundName}|${oppName}`;
+            if(seenBouts.has(key)) break;
+            seenBouts.add(key);
+            bouts.push({ opponent: oppName, scoreFor: s2, scoreAgainst: s1, result: 'Lost', type: `DE ${roundName}` });
+            break;
+          }
+        } else {
+          for (const off of [-2,-1,1,2]) {
+            const o = rows[i+off]; if(!o) continue;
+            if(!o.text.toUpperCase().includes(surnameUpper)) continue;
+            if(/\d+-\d+/.test(o.text)) continue;
+            if(!winnerName||winnerName.length<3) continue;
+            const key = `${roundName}|${winnerName}`;
+            if(seenBouts.has(key)) break;
+            seenBouts.add(key);
+            bouts.push({ opponent: winnerName, scoreFor: s1, scoreAgainst: s2, result: 'Won', type: `DE ${roundName}` });
+            break;
+          }
+        }
+      });
+    }
+  }
+  return bouts;
+}
+
+module.exports = { syncFencer, scrapeFromFTLUrl };
