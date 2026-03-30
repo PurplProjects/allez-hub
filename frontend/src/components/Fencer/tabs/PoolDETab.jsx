@@ -2,6 +2,7 @@
 import { useTheme } from '../../../hooks/useTheme';
 
 export function PoolDETab({ stats }) {
+  const { theme: T } = useTheme();
   if (!stats) return null;
   const c = stats.career || {};
   const years = Object.keys(stats.byYear || {}).sort();
@@ -10,7 +11,6 @@ export function PoolDETab({ stats }) {
 
   return (
     <div style={{ padding:14, display:'flex', flexDirection:'column', gap:10 }}>
-      {/* Career summary */}
       <div style={{ background:T.surface1, border:`0.5px solid ${T.surface2}`, borderRadius:T.borderRadius, padding:14 }}>
         <div style={{ fontSize:11, fontWeight:500, color:T.textTertiary, textTransform:'uppercase', letterSpacing:'.05em', marginBottom:12 }}>Career poule vs DE</div>
         {[['Poule', c.pouleWinPct, T.primary],['DE', c.deWinPct, T.textTertiary]].map(([lbl,pct,col]) => (
@@ -23,12 +23,10 @@ export function PoolDETab({ stats }) {
           </div>
         ))}
         <div style={{ background:T.surface2, borderRadius:6, padding:'8px 10px', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-          <span style={{ fontSize:12, color:T.textSecondary }}>Gap (Poule – DE)</span>
+          <span style={{ fontSize:12, color:T.textSecondary }}>Gap (Poule - DE)</span>
           <span style={{ fontSize:12, fontWeight:500, color:gapColor(c.pouleWinPct - c.deWinPct) }}>{c.pouleWinPct - c.deWinPct}pp</span>
         </div>
       </div>
-
-      {/* By year */}
       <div style={{ background:T.surface1, border:`0.5px solid ${T.surface2}`, borderRadius:T.borderRadius, padding:14 }}>
         <div style={{ fontSize:11, fontWeight:500, color:T.textTertiary, textTransform:'uppercase', letterSpacing:'.05em', marginBottom:12 }}>By year</div>
         {years.map(y => {
@@ -46,7 +44,7 @@ export function PoolDETab({ stats }) {
                 <div key={lbl} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:4 }}>
                   <span style={{ fontSize:11, color:T.textTertiary, width:44 }}>{lbl}</span>
                   <div style={{ flex:1, height:5, background:T.surface2, borderRadius:3 }}>
-                    <div style={{ height:5, background:col, borderRadius:3, width:`${pct}%` }}/>
+                    <div style={{ width:`${pct}%`, height:5, background:col, borderRadius:3 }}/>
                   </div>
                   <span style={{ fontSize:11, fontWeight:500, color:col, width:28, textAlign:'right' }}>{pct}%</span>
                 </div>
@@ -59,8 +57,8 @@ export function PoolDETab({ stats }) {
   );
 }
 
-// RivalsTab.jsx
 export function RivalsTab({ rivals = [] }) {
+  const { theme: T } = useTheme();
   const priorityTargets = rivals.filter(r => r.winPct < 40).sort((a,b) => a.winPct - b.winPct);
   const strongRecords   = rivals.filter(r => r.winPct >= 60).sort((a,b) => b.winPct - a.winPct);
   const competitive     = rivals.filter(r => r.winPct >= 40 && r.winPct < 60);
@@ -91,7 +89,7 @@ export function RivalsTab({ rivals = [] }) {
     <div style={{ padding:14, display:'flex', flexDirection:'column', gap:10 }}>
       {[
         { title:'Priority targets', items:priorityTargets, border:T.danger },
-        { title:'Competitive — winnable', items:competitive, border:T.warning },
+        { title:'Competitive - winnable', items:competitive, border:T.warning },
         { title:'Strong records', items:strongRecords, border:T.success },
       ].map(section => section.items.length > 0 && (
         <div key={section.title} style={{ background:T.surface1, border:`0.5px solid ${T.surface2}`, borderRadius:T.borderRadius, padding:14, borderLeft:`2px solid ${section.border}` }}>
@@ -101,7 +99,7 @@ export function RivalsTab({ rivals = [] }) {
       ))}
       {rivals.length === 0 && (
         <div style={{ padding:32, textAlign:'center', color:T.textTertiary, fontSize:13 }}>
-          Not enough data yet — rivals appear after 3+ encounters with the same opponent.
+          Not enough data yet - rivals appear after 3+ encounters with the same opponent.
         </div>
       )}
     </div>
