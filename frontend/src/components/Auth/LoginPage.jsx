@@ -35,15 +35,6 @@ export default function LoginPage() {
     back:    { textAlign:'center', fontSize:12, color:T.primary, cursor:'pointer', marginTop:10, display:'block' },
   };
 
-  export default function LoginPage() {
-  const themeContext = useTheme();
-  // Safety: If theme is missing, return null or a loader to prevent crash
-  if (!themeContext || !themeContext.theme) {
-    console.error("Theme context is missing. Check your ThemeProvider.");
-    return <div style={{ background: '#000', color: '#fff' }}>Loading...</div>;
-  }
-
-  const { theme: T } = themeContext;
   async function handleSendOTP(e) {
     e.preventDefault();
     if (!email.includes('@')) { setError('Please enter a valid email address'); return; }
