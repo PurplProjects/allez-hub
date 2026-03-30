@@ -1,11 +1,10 @@
 import { useState, useEffect } from 'react';
 import { getSquad, getFencerDetail, addCoachNote, triggerScrape } from '../../lib/api';
-import { theme } from '../../lib/theme';
+import { useTheme } from '../../hooks/useTheme';
 import TopBar from '../Shared/TopBar';
 import AddTournamentTab from '../Shared/AddTournamentTab';
 import SectionTabs from '../Shared/SectionTabs';
 
-const T = theme;
 const TABS = [
   { id:'squad',    label:'Squad overview' },
   { id:'compare',  label:'Comparison' },
@@ -15,6 +14,7 @@ const TABS = [
 ];
 
 export default function CoachDashboard() {
+  const { theme: T } = useTheme();
   const [activeTab,  setActiveTab]  = useState('squad');
   const [viewMode,   setViewMode]   = useState('coach'); // 'coach' or 'fencer'
   const [squad,      setSquad]      = useState([]);
