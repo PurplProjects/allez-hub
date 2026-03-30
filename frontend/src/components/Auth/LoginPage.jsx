@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { sendOTP, verifyOTP } from '../../lib/api';
 import { useAuth } from '../../hooks/useAuth';
 import { useTheme } from '../../hooks/useTheme';
+import { clubInfo } from '../../lib/theme';
 
 
 export default function LoginPage() {
@@ -93,8 +94,8 @@ export default function LoginPage() {
     <div style={s.wrap}>
       {step === 'email' ? (
         <div style={s.card}>
-          <div style={s.logo}>{T.clubShort}</div>
-          <div style={s.title}>{T.clubName}</div>
+          <div style={s.logo}>{clubInfo.clubShort}</div>
+          <div style={s.title}>{clubInfo.clubName}</div>
           <div style={s.sub}>Performance Hub — enter your email to sign in.<br />No password needed.</div>
           {error && <div style={s.error}>{error}</div>}
           <form onSubmit={handleSendOTP}>
@@ -115,7 +116,7 @@ export default function LoginPage() {
         </div>
       ) : (
         <div style={s.card}>
-          <div style={s.logo}>{T.clubShort}</div>
+          <div style={s.logo}>{clubInfo.clubShort}</div>
           <div style={s.title}>Check your email</div>
           <div style={s.sub}>We sent a 6-digit code to<br /><strong style={{ color:T.textPrimary }}>{email}</strong></div>
           {error && <div style={s.error}>{error}</div>}
