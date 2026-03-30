@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
 import { getChecklist, saveChecklist } from '../../../lib/api';
-import { CHECKLIST_ITEMS, theme } from '../../../lib/theme';
+import { CHECKLIST_ITEMS } from '../../../lib/theme';
+import { useTheme } from '../../../hooks/useTheme';
 
-const T = theme;
 
 export default function MentalTab({ fencerId }) {
+  const { theme: T } = useTheme();
   const today = new Date().toISOString().split('T')[0];
   const [checked, setChecked] = useState(new Set());
   const [loading, setLoading] = useState(true);
