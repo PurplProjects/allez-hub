@@ -123,6 +123,7 @@ export default function FencerDashboard() {
 }
 
 function LoadingScreen() {
+  const { theme: T } = useTheme();
   return (
     <div style={{
       minHeight: '100vh', background: T.black,
