@@ -11,6 +11,7 @@ import BoutHistoryTab from './tabs/BoutHistoryTab';
 import MentalTab      from './tabs/MentalTab';
 import RoutineTab     from './tabs/RoutineTab';
 import AddTournamentTab from '../Shared/AddTournamentTab';
+import EditTournamentTab from '../Shared/EditTournamentTab';
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
@@ -20,6 +21,7 @@ const TABS = [
   { id: 'mental',   label: 'Mental checklist' },
   { id: 'routine',  label: 'Match-day routine' },
   { id: 'tournament', label: '+ Add tournament' },
+  { id: 'edit',       label: '✏️ Edit results' },
 ];
 
 export default function FencerDashboard() {
@@ -117,13 +119,15 @@ export default function FencerDashboard() {
         {activeTab === 'tournament' && (
           <AddTournamentTab />
         )}
+        {activeTab === 'edit' && (
+          <EditTournamentTab />
+        )}
       </div>
     </div>
   );
 }
 
 function LoadingScreen() {
-  const { theme: T } = useTheme();
   return (
     <div style={{
       minHeight: '100vh', background: T.black,
