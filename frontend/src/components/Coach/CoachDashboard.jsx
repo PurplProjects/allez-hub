@@ -4,6 +4,7 @@ import { useTheme } from '../../hooks/useTheme';
 import TopBar from '../Shared/TopBar';
 import AddTournamentTab from '../Shared/AddTournamentTab';
 import EditTournamentTab from '../Shared/EditTournamentTab';
+import AddFencerTab from '../Shared/AddFencerTab';
 import SectionTabs from '../Shared/SectionTabs';
 
 const TABS = [
@@ -13,6 +14,7 @@ const TABS = [
   { id:'upcoming',   label:'Upcoming events' },
   { id:'tournament',  label:'+ Add tournament' },
   { id:'edit',        label:'✏️ Edit results' },
+  { id:'addfencer', label:'➕ Add fencer' },
 ];
 
 export default function CoachDashboard() {
@@ -389,6 +391,10 @@ export default function CoachDashboard() {
           <AddTournamentTab />
         )}
 
+        {activeTab === 'addfencer' && (
+          <AddFencerTab />
+        )}
+        
         {/* ── UPCOMING ── */}
         {activeTab === 'upcoming' && (
           <div style={{ background:T.surface1, border:`0.5px solid ${T.surface2}`, borderRadius:T.borderRadius, padding:14 }}>
