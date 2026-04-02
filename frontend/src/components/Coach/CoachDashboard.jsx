@@ -3,6 +3,7 @@ import { getSquad, getFencerDetail, addCoachNote, triggerScrape } from '../../li
 import { useTheme } from '../../hooks/useTheme';
 import TopBar from '../Shared/TopBar';
 import AddTournamentTab from '../Shared/AddTournamentTab';
+import EditTournamentTab from '../Shared/EditTournamentTab';
 import SectionTabs from '../Shared/SectionTabs';
 
 const TABS = [
@@ -11,6 +12,7 @@ const TABS = [
   { id:'focus',    label:'Focus areas' },
   { id:'upcoming',   label:'Upcoming events' },
   { id:'tournament',  label:'+ Add tournament' },
+  { id:'edit',        label:'✏️ Edit results' },
 ];
 
 export default function CoachDashboard() {
