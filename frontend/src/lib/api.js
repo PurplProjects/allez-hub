@@ -72,3 +72,15 @@ export async function pollScrapeUntilDone(fencerId, onUpdate, intervalMs = 5000)
     poll();
   });
 }
+
+// ── Edit Tournament ──────────────────────────────────────────
+export const searchCompetitions = (q, fencer_id) => {
+  const qs = new URLSearchParams({ q: q || '' });
+  if (fencer_id) qs.set('fencer_id', fencer_id);
+  return request(`/bouts/competitions/search?${qs}`);
+};
+export const getCompetitionWithBouts = (id) => request(`/bouts/competitions/${id}`);
+export const updateCompetition = (id, data) => request(`/bouts/competitions/${id}`, { method:'PUT', body: JSON.stringify(data) });
+export const updateBout  = (id, data) => request(`/bouts/${id}`, { method:'PUT',    body: JSON.stringify(data) });
+export const deleteBout  = (id)       => request(`/bouts/${id}`, { method:'DELETE' });
+export const addBout     = (compId, data) => request(`/bouts/competitions/${compId}/bouts`, { method:'POST', body: JSON.stringify(data) });
