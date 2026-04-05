@@ -537,7 +537,6 @@ async function scrapeFTLTableau(eventGUID, tableauGUID, surname) {
   const trees = await fetchJSON(`${FTL}/tableaus/scores/${eventGUID}/${tableauGUID}/trees`);
   if (!Array.isArray(trees) || !trees.length) return [];
 
-  // Round name from table index. 0 = leftmost (biggest bracket), numTables-1 = Final.
   function getRoundName(tableIdx, numTables) {
     const fromRight = numTables - 1 - tableIdx;
     if (fromRight === 0) return 'Final';
@@ -546,19 +545,16 @@ async function scrapeFTLTableau(eventGUID, tableauGUID, surname) {
     return `Table of ${Math.pow(2, fromRight + 1)}`;
   }
 
-  // FTL name format: "SURNAME Firstname" or "(N) SURNAME Firstname CLUB / COUNTRY"
-  // Convert to "Firstname Surname"
+  // "SURNAME Firstname CLUB / COUNTRY ..." → "Firstname Surname"
   function ftlFormatName(raw) {
-    // Strip seed number prefix
-    const clean = raw.replace(/^\(\d+\)\s*/, '').trim();
-    // Strip club/country suffix (anything after multiple spaces or slash pattern)
-    const nameOnly = clean.replace(/\s{2,}.*$/, '').replace(/\s+\/.*$/, '').trim();
-    const words = nameOnly.split(/\s+/);
-    if (words.length < 2) return nameOnly;
-    // Find split: surname is all-caps word(s), first name is mixed case
+    const noSeed  = raw.replace(/^\(\d+\)\s*/, '').trim();
+    const noClub  = noSeed.replace(/\s+[A-Z0-9\s\-'\/]+\/\s*[A-Z]{2,3}.*$/, '').trim();
+    const words   = noClub.split(/\s+/);
+    if (words.length < 2) return noClub;
+    // Surname = leading all-caps words, first name = remaining
     let splitAt = 1;
     for (let i = 1; i < words.length; i++) {
-      if (words[i] !== words[i].toUpperCase()) { splitAt = i; break; }
+      if (words[i] !== words[i].toUpperCase() || words[i].length <= 1) { splitAt = i; break; }
       splitAt = i + 1;
     }
     const sur   = words.slice(0, splitAt).join(' ');
@@ -567,72 +563,80 @@ async function scrapeFTLTableau(eventGUID, tableauGUID, surname) {
     return `${first} ${sur[0]}${sur.slice(1).toLowerCase()}`;
   }
 
+  // Parse flat text into ordered bracket entries using first-occurrence-per-seed.
+  // FTL collapses all div/span text into one string; each entry starts with "(N)".
+  // The first time we see seed N is always its leftmost-column bracket position.
+  function parseBracketOrder(text) {
+    const parts = text.split(/(?=\(\d+\))/);
+    const seenSeeds = new Set();
+    const ordered = [];
+    for (const part of parts) {
+      const p = part.trim();
+      if (!p) continue;
+      const sm = p.match(/^\((\d+)\)/);
+      if (!sm) continue;
+      const seed = parseInt(sm[1]);
+      if (!seenSeeds.has(seed)) {
+        seenSeeds.add(seed);
+        ordered.push({ seed, raw: p });
+      }
+    }
+    return ordered;
+  }
+
   for (const tree of trees) {
     const numTables = tree.numTables || 0;
 
-    // Fetch all table HTML upfront
-    const tableTexts = [];
+    // Fetch all tables
+    const tables = [];
     for (let t = 0; t < numTables; t++) {
       const url  = `${FTL}/tableaus/scores/${eventGUID}/${tableauGUID}/trees/${tree.guid}/tables/${t}/4`;
       const html = await axios.get(url, { headers: HEADERS, timeout: 10000 }).then(r => r.data).catch(() => '');
-      // FTL tableaux use divs/spans, not tr/td. Extract visible text.
       const $    = cheerio.load(html);
-      // Remove script/style tags then get text
-      $('script, style').remove();
-      const rawText = $.root().text();
-      // Split into lines, clean up
-      const lines = rawText.split(/\n/).map(l => l.replace(/\s+/g, ' ').trim()).filter(l => l);
-      tableTexts.push({ t, lines, hasUs: html.toUpperCase().includes(surnameUpper) });
+      $('script,style').remove();
+      const text = $.root().text().replace(/\s+/g, ' ').trim();
+      tables.push({ t, text, hasUs: text.toUpperCase().includes(surnameUpper) });
     }
 
-    // For each table where our fencer appears (except the last — Final has no next table)
     for (let t = 0; t < numTables - 1; t++) {
-      const cur  = tableTexts[t];
-      const next = tableTexts[t + 1];
+      const cur  = tables[t];
+      const next = tables[t + 1];
       if (!cur || !cur.hasUs) continue;
 
       const roundName = getRoundName(t, numTables);
 
-      // Extract ordered list of fencer entries from the current table text.
-      // Entries look like: "(N) SURNAME Firstname" or "(N) - BYE -"
-      const nameEntries = cur.lines.filter(l => /^\(\d+\)/.test(l));
-
-      // Find our position (0-indexed)
-      const ourIdx = nameEntries.findIndex(e => e.toUpperCase().includes(surnameUpper));
+      // Build ordered bracket list from current table
+      const curOrder  = parseBracketOrder(cur.text);
+      const ourIdx    = curOrder.findIndex(e => e.raw.toUpperCase().includes(surnameUpper));
       if (ourIdx === -1) continue;
 
-      // Odd 1-indexed = fights below (oppIdx = ourIdx + 1)
-      // Even 1-indexed = fights above (oppIdx = ourIdx - 1)
+      // Odd (1-indexed) → opponent below; even → opponent above
       const pos1   = ourIdx + 1;
       const oppIdx = pos1 % 2 === 1 ? ourIdx + 1 : ourIdx - 1;
-      const oppRaw = nameEntries[oppIdx];
-      if (!oppRaw || oppRaw.includes('BYE')) continue; // BYE — no bout
+      const opp    = curOrder[oppIdx];
+      if (!opp || opp.raw.includes('BYE')) continue;
 
-      const oppName = ftlFormatName(oppRaw);
+      const oppName = ftlFormatName(opp.raw);
 
-      // Find winner: check next table — whichever of our fencer / opponent appears in
-      // the slot at floor(ourIdx/2)
-      const nextEntries = next ? next.lines.filter(l => /^\(\d+\)/.test(l)) : [];
-      const winnerSlot  = Math.floor(ourIdx / 2);
-      const winnerEntry = nextEntries[winnerSlot] || '';
-      const weWon       = winnerEntry.toUpperCase().includes(surnameUpper);
+      // Determine winner: check next table at slot floor(ourIdx/2)
+      const nextOrder  = parseBracketOrder(next.text);
+      const winnerSlot = Math.floor(ourIdx / 2);
+      const winnerEntry = nextOrder[winnerSlot];
+      if (!winnerEntry) continue;
+      const weWon = winnerEntry.raw.toUpperCase().includes(surnameUpper);
 
-      // Score: shown under the winner's name in the next table.
-      // In the next table lines, find the winner entry then look for "X - Y" nearby.
+      // Find score: search in next table text near the winner's name
       let scoreWinner = null, scoreLoser = null;
-      if (next) {
-        const winnerLineIdx = next.lines.findIndex(l => l.toUpperCase().includes(surnameUpper) && /^\(\d+\)/.test(l));
-        const oppLineIdx    = next.lines.findIndex(l => l.toUpperCase().includes(oppName.split(' ')[0].toUpperCase()) && /^\(\d+\)/.test(l));
-        const searchFrom    = weWon ? winnerLineIdx : oppLineIdx;
-        if (searchFrom !== -1) {
-          // Look for score in lines after the winner entry
-          for (let i = searchFrom + 1; i < Math.min(searchFrom + 8, next.lines.length); i++) {
-            const sm = next.lines[i].match(/^(\d+)\s*[-–]\s*(\d+)$/);
-            if (sm) {
-              scoreWinner = parseInt(sm[1]);
-              scoreLoser  = parseInt(sm[2]);
-              break;
-            }
+      const searchName = weWon ? surnameUpper : opp.raw.match(/^\(\d+\)\s*([A-Z]+)/)?.[1] || '';
+      if (searchName) {
+        const idx = next.text.toUpperCase().indexOf(searchName);
+        if (idx !== -1) {
+          // Look for "X - Y" within next 150 chars after winner name
+          const after = next.text.slice(idx, idx + 150);
+          const sm = after.match(/(\d+)\s*[-–]\s*(\d+)/);
+          if (sm) {
+            scoreWinner = parseInt(sm[1]);
+            scoreLoser  = parseInt(sm[2]);
           }
         }
       }
