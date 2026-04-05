@@ -531,62 +531,163 @@ async function scrapeFTLPool(eventGUID, poolGUID, surname) {
 
 async function scrapeFTLTableau(eventGUID, tableauGUID, surname) {
   const surnameUpper = surname.toUpperCase();
-  const bouts = [], seenBouts = new Set();
+  const bouts = [];
+  const seen  = new Set();
+
   const trees = await fetchJSON(`${FTL}/tableaus/scores/${eventGUID}/${tableauGUID}/trees`);
   if (!Array.isArray(trees) || !trees.length) return [];
-  const roundNames = ['Table of 128','Table of 64','Table of 32','Table of 16','Quarter-Final','Semi-Final','Final'];
 
-  function extractName(raw) {
-    const s = raw.replace(/^\(\d+\)\s*/, '').trim();
-    const m = s.match(/^((?:[A-Z][A-Z\s\-'\/]+\s+)*[A-Z]+(?:\s+[A-Z]+)*)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/);
-    return m ? `${m[2].trim()} ${m[1][0]}${m[1].slice(1).toLowerCase()}` : s.replace(/Strip\s*\d+.*/gi,'').trim();
+  // Round name from table index. Table 0 = leftmost (biggest bracket).
+  // numTables-1 = Final, numTables-2 = Semi Final, numTables-3 = Quarter Final
+  // All others: bracket size = 2^(numTables - tableIdx)
+  function getRoundName(tableIdx, numTables) {
+    const fromRight = numTables - 1 - tableIdx;
+    if (fromRight === 0) return 'Final';
+    if (fromRight === 1) return 'Semi Final';
+    if (fromRight === 2) return 'Quarter Final';
+    return `Table of ${Math.pow(2, fromRight + 1)}`;
+  }
+
+  // "SURNAME First" or "SURNAME First Second" → "First Surname"
+  // FTL names are ALL-CAPS surname followed by mixed-case first name
+  function ftlFormatName(raw) {
+    const clean = raw.replace(/^\(\d+\)\s*/, '').trim();
+    // Split on first transition from all-caps word to mixed-case word
+    const words = clean.split(/\s+/);
+    // Find first word that is not all-caps (that is the first name)
+    let splitAt = words.findIndex(w => w.length > 0 && w !== w.toUpperCase());
+    if (splitAt <= 0) splitAt = 1; // fallback: first word is surname
+    const surname = words.slice(0, splitAt).join(' ');
+    const first   = words.slice(splitAt).join(' ');
+    if (!first) return surname;
+    return `${first} ${surname[0]}${surname.slice(1).toLowerCase()}`;
   }
 
   for (const tree of trees) {
-    for (let t = 0; t < (tree.numTables||0); t++) {
-      const html = await axios.get(`${FTL}/tableaus/scores/${eventGUID}/${tableauGUID}/trees/${tree.guid}/tables/${t}/4`, { headers: HEADERS, timeout: 10000 }).then(r=>r.data).catch(()=>'');
-      if (!html.toUpperCase().includes(surnameUpper)) continue;
-      const roundName = roundNames[t] || `Round ${t+1}`;
-      const $ = cheerio.load(html);
-      const rows = $('tr').toArray().map(r => ({ text: $(r).text().trim() }));
-      rows.forEach((row, i) => {
-        const clean = row.text.replace(/Strip\s*\d+/gi,'');
-        const sm = clean.match(/(\d+)\s*-\s*(\d+)/);
-        if (!sm || row.text.includes('BYE')) return;
-        const s1 = parseInt(sm[1]), s2 = parseInt(sm[2]);
-        if (s1 > 20 || s2 > 20) return;
-        const hasUs = row.text.toUpperCase().includes(surnameUpper);
-        const nameRaw = row.text.replace(/^\(\d+\)\s*/,'').replace(/\s*\d+\s*-\s*\d+[\s\S]*$/,'').trim();
-        const winnerName = extractName(nameRaw);
-        if (hasUs) {
-          for (const off of [-2,-1,1,2]) {
-            const o = rows[i+off]; if(!o) continue;
-            if(!o.text||o.text.includes('BYE')||/\d+-\d+/.test(o.text)) continue;
-            if(o.text.toUpperCase().includes(surnameUpper)) continue;
-            const oppName = extractName(o.text.replace(/^\(\d+\)\s*/,'').trim());
-            if(!oppName||oppName.length<3) continue;
-            const key = `${roundName}|${oppName}`;
-            if(seenBouts.has(key)) break;
-            seenBouts.add(key);
-            bouts.push({ opponent: oppName, scoreFor: s2, scoreAgainst: s1, result: 'Lost', type: `DE ${roundName}` });
-            break;
+    const numTables = tree.numTables || 0;
+
+    // Fetch all tables first
+    const tables = [];
+    for (let t = 0; t < numTables; t++) {
+      const url  = `${FTL}/tableaus/scores/${eventGUID}/${tableauGUID}/trees/${tree.guid}/tables/${t}/4`;
+      const html = await axios.get(url, { headers: HEADERS, timeout: 10000 }).then(r => r.data).catch(() => '');
+      const $    = cheerio.load(html);
+
+      // Extract ordered list of fencer entries from this table column.
+      // Each entry in the leftmost column is either a seeded fencer "(N) NAME Club"
+      // or a score/result from a previous round.
+      // We parse the visible text rows, keeping only name rows (contain seed number)
+      // and score rows (contain "X - Y").
+      const entries = [];
+      $('td, th').each((_, el) => {
+        const txt = $(el).text().replace(/\s+/g, ' ').trim();
+        if (!txt) return;
+        entries.push(txt);
+      });
+
+      tables.push({ idx: t, html, entries, $, hasUs: html.toUpperCase().includes(surnameUpper) });
+    }
+
+    // Process each table where our fencer appears
+    for (let t = 0; t < numTables - 1; t++) {
+      const cur  = tables[t];
+      const next = tables[t + 1];
+      if (!cur || !cur.hasUs) continue;
+
+      const roundName = getRoundName(t, numTables);
+
+      // Parse current table into ordered list of competitor names (seed NAME or BYE).
+      const $ = cur.$;
+      const nameRows = [];
+
+      // Use tr rows — each visible competitor row contains their seed+name
+      $('tr').each((_, tr) => {
+        const tds = $(tr).find('td');
+        if (tds.length === 0) return;
+        const first = $(tds[0]).text().replace(/\s+/g, ' ').trim();
+        // Match seeded entry: "(N) NAME" or "- BYE -"
+        if (/^\(\d+\)/.test(first) || first.includes('BYE')) {
+          nameRows.push(first);
+        }
+      });
+
+      // Find our fencer's position (1-indexed)
+      const ourPos = nameRows.findIndex(n => n.toUpperCase().includes(surnameUpper));
+      if (ourPos === -1) continue;
+      const pos1  = ourPos + 1; // 1-indexed
+
+      // Opponent is directly above (even pos) or below (odd pos)
+      const oppPos  = pos1 % 2 === 1 ? ourPos + 1 : ourPos - 1;
+      const oppRaw  = nameRows[oppPos];
+      if (!oppRaw || oppRaw.includes('BYE')) continue; // BYE — skip
+
+      const oppName = ftlFormatName(oppRaw);
+
+      // Determine winner: check next table for whose name appears in same bracket slot
+      const winnerSlot = Math.floor(ourPos / 2); // position in next table (0-indexed)
+      const nextNames  = [];
+      if (next) {
+        const $n = next.$;
+        $n('tr').each((_, tr) => {
+          const tds = $n(tr).find('td');
+          if (tds.length === 0) return;
+          const first = $n(tds[0]).text().replace(/\s+/g, ' ').trim();
+          if (/^\(\d+\)/.test(first) || first.includes('BYE')) {
+            nextNames.push(first);
           }
-        } else {
-          for (const off of [-2,-1,1,2]) {
-            const o = rows[i+off]; if(!o) continue;
-            if(!o.text.toUpperCase().includes(surnameUpper)) continue;
-            if(/\d+-\d+/.test(o.text)) continue;
-            if(!winnerName||winnerName.length<3) continue;
-            const key = `${roundName}|${winnerName}`;
-            if(seenBouts.has(key)) break;
-            seenBouts.add(key);
-            bouts.push({ opponent: winnerName, scoreFor: s1, scoreAgainst: s2, result: 'Won', type: `DE ${roundName}` });
-            break;
+        });
+      }
+
+      const winnerRow = nextNames[winnerSlot] || '';
+      const weWon     = winnerRow.toUpperCase().includes(surnameUpper);
+
+      // Score: shown in next table under the winner's name.
+      // Find the score associated with this matchup in next table.
+      // The score appears as "X - Y" near the winner entry in next table.
+      let scoreWinner = null, scoreLoser = null;
+      if (next) {
+        const $n = next.$;
+        // Look for score near the winner's position in next table
+        const allText = [];
+        $n('td, th').each((_, el) => {
+          allText.push($n(el).text().replace(/\s+/g, ' ').trim());
+        });
+        // Find winner name in next table text, then find nearest score
+        const winnerName = weWon ? surnameUpper : oppName.split(' ')[0].toUpperCase();
+        for (let i = 0; i < allText.length; i++) {
+          if (allText[i].toUpperCase().includes(winnerName)) {
+            // Look for score in nearby entries
+            for (let j = i + 1; j < Math.min(i + 10, allText.length); j++) {
+              const sm = allText[j].match(/^(\d+)\s*-\s*(\d+)$/);
+              if (sm) {
+                scoreWinner = parseInt(sm[1]);
+                scoreLoser  = parseInt(sm[2]);
+                break;
+              }
+            }
+            if (scoreWinner !== null) break;
           }
         }
+      }
+
+      const sf = weWon ? scoreWinner : scoreLoser;
+      const sa = weWon ? scoreLoser  : scoreWinner;
+      const result = weWon ? 'Won' : 'Lost';
+
+      const key = `${roundName}|${oppName}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      bouts.push({
+        opponent:     oppName,
+        scoreFor:     sf   ?? null,
+        scoreAgainst: sa   ?? null,
+        result,
+        type: `DE ${roundName}`,
       });
     }
   }
+
   return bouts;
 }
 
