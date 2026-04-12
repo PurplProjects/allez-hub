@@ -532,11 +532,9 @@ async function scrapeFTLTableau(eventGUID, tableauGUID, surname) {
       const oppName = ftlFormatName(opp.raw);
       const weWon   = next.text.toUpperCase().includes(surnameUpper);
 
-      // Get opponent's first all-caps word (surname) for score search
+// Score appears in cur.text next to the opponent (loser) entry
       const oppSurname = opp.raw.match(/^\(\d+\)\s*([A-Z]{2,})/)?.[1] || '';
-      const { scoreWinner, scoreLoser } = weWon
-        ? findScore(next.text, surnameUpper, opp.raw)
-        : findScore(next.text, oppSurname, '');
+      const { scoreWinner, scoreLoser } = findScore(cur.text, oppSurname, '');
 
       const sf = weWon ? scoreWinner : scoreLoser;
       const sa = weWon ? scoreLoser  : scoreWinner;
