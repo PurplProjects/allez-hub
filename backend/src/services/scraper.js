@@ -564,22 +564,23 @@ async function scrapeFTLTableau(eventGUID, tableauGUID, surname) {
   // FTL collapses all div/span text into one string; each entry starts with "(N)".
   // The first time we see seed N is always its leftmost-column bracket position.
   function parseBracketOrder(text) {
-    const parts = text.split(/(?=\(\d+\))/);
-    const seenSeeds = new Set();
-    const ordered = [];
-    for (const part of parts) {
-      const p = part.trim();
-      if (!p) continue;
-      const sm = p.match(/^\((\d+)\)/);
-      if (!sm) continue;
-      const seed = parseInt(sm[1]);
-      if (!seenSeeds.has(seed)) {
-        seenSeeds.add(seed);
-        ordered.push({ seed, raw: p });
-      }
+  const parts = text.split(/(?=\(\d+\))/);
+  const ordered = [];
+  for (const part of parts) {
+    const p = part.trim();
+    if (!p) continue;
+    if (!/^\(\d+\)/.test(p)) continue;
+    // Only keep leftmost-column entries:
+    // - BYE entries
+    // - entries that contain a club marker "/ XXX" (country code)
+    const isBye  = /BYE/i.test(p);
+    const hasClub = /\/\s*[A-Z]{2,3}(\s|$)/.test(p);
+    if (isBye || hasClub) {
+      ordered.push({ seed: parseInt(p.match(/^\((\d+)\)/)[1]), raw: p });
     }
-    return ordered;
   }
+  return ordered;
+}
 
   for (const tree of trees) {
     const numTables = tree.numTables || 0;
