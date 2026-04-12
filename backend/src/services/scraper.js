@@ -610,8 +610,9 @@ async function scrapeFTLTableau(eventGUID, tableauGUID, surname) {
       if (ourIdx === -1) continue;
 
       // Odd (1-indexed) → opponent below; even → opponent above
-      const pos1   = ourIdx + 1;
-      const oppIdx = pos1 % 2 === 1 ? ourIdx + 1 : ourIdx - 1;
+      const bracketPos = Math.floor(ourIdx / 2);
+const pos1   = bracketPos + 1;
+const oppIdx = pos1 % 2 === 1 ? ourIdx + 2 : ourIdx - 2;
       const opp    = curOrder[oppIdx];
       if (!opp || opp.raw.includes('BYE')) continue;
 
