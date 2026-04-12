@@ -540,7 +540,7 @@ async function scrapeFTLTableau(eventGUID, tableauGUID, surname) {
     if (fromRight === 0) return 'Final';
     if (fromRight === 1) return 'Semi Final';
     if (fromRight === 2) return 'Quarter Final';
-    return `Table of ${Math.pow(2, fromRight + 1)}`;
+    return `Table of ${Math.pow(2, fromRight)}`;
   }
 
   // "SURNAME Firstname CLUB / COUNTRY ..." → "Firstname Surname"
