@@ -58,7 +58,6 @@ async function getCompetitionList(ukrId) {
   const $ = cheerio.load(html);
   const competitions = [];
   const seen = new Set();
-
   $('tr[onclick*="tourneydetail"]').each((_, tr) => {
     const onclick = $(tr).attr('onclick') || '';
     const tidMatch = onclick.match(/tourneydetail\/(\d+)/);
@@ -78,7 +77,6 @@ async function getCompetitionList(ukrId) {
     seen.add(key);
     competitions.push({ ukrTourneyId, tourneyName, eventName, rank, fieldSize });
   });
-
   return competitions;
 }
 
@@ -346,7 +344,6 @@ async function scrapeFromFTLUrl(ftlUrl, fencerId, coachMode = false) {
   $ev('a[href*="/tableaus/scores/"]').each((_,a)=>{ const m=$ev(a).attr('href')?.match(/\/tableaus\/scores\/[A-F0-9]{32}\/([A-F0-9]{32})/i); if(m&&!tabGUIDs.includes(m[1].toUpperCase()))tabGUIDs.push(m[1].toUpperCase()); });
 
   for (const fencer of allFencers) {
-    // Use last word of name (actual surname) since FTL lists SURNAME Firstname
     const nameParts = fencer.name.trim().split(/\s+/);
     const surname   = nameParts[nameParts.length - 1];
     const match = allEventFencers.find(ef => ef.search?.toUpperCase().includes(surname.toUpperCase()));
@@ -424,41 +421,81 @@ async function scrapeFTLTableau(eventGUID, tableauGUID, surname) {
     return `Table of ${Math.pow(2, fromRight)}`;
   }
 
+  // Format FTL name: "SURNAME FirstnameALLEZ FENCING / GBR 10 - 3Strip 6"
+  // → "Firstname Surname"
   function ftlFormatName(raw) {
-    const noSeed = raw.replace(/^\(\d+\)\s*/, '').trim();
-    const noClub = noSeed.replace(/\s+[A-Z0-9\s\-'\/]+\/\s*[A-Z]{2,3}.*$/, '').trim();
-    const words  = noClub.split(/\s+/);
-    if (words.length < 2) return noClub;
-    let splitAt = 1;
-    for (let i = 1; i < words.length; i++) {
-      if (words[i] !== words[i].toUpperCase() || words[i].length <= 1) { splitAt = i; break; }
-      splitAt = i + 1;
+    let s = raw.replace(/^\(\d+\)\s*/, '').trim();
+    // Remove score suffix
+    s = s.replace(/\s*\d+\s*[-–]\s*\d+.*$/, '').trim();
+    // Remove country code suffix "/ GBR"
+    s = s.replace(/\s*\/\s*[A-Z]{2,3}.*$/, '').trim();
+
+    // Split each space-separated token on lowercase→uppercase boundaries
+    // to handle "AjithALLEZ" → ["Ajith", "ALLEZ"]
+    const expanded = [];
+    for (const tok of s.split(/\s+/)) {
+      const parts = tok.replace(/([a-z])([A-Z]{2,})/g, '$1 $2');
+      expanded.push(...parts.split(/\s+/));
     }
-    const sur   = words.slice(0, splitAt).join(' ');
-    const first = words.slice(splitAt).join(' ');
-    if (!first) return sur;
-    return `${first} ${sur[0]}${sur.slice(1).toLowerCase()}`;
+
+    // Collect surname (leading all-caps tokens) and first name (first mixed-case token)
+    const surnameParts = [];
+    const firstParts   = [];
+    let state = 'surname';
+    for (const tok of expanded) {
+      const isAllCaps = tok === tok.toUpperCase() && /[A-Z]/.test(tok) && tok.length > 1;
+      if (state === 'surname') {
+        if (isAllCaps) surnameParts.push(tok);
+        else { state = 'first'; firstParts.push(tok); }
+      } else {
+        if (isAllCaps) break; // club name starts
+        firstParts.push(tok);
+      }
+    }
+
+    const sur = surnameParts.join(' ');
+    const fst = firstParts.join(' ');
+
+    const capWord = w => w ? w[0].toUpperCase() + w.slice(1).toLowerCase() : w;
+    const surCap  = sur.split(' ').map(capWord).join(' ');
+
+    if (!sur)  return expanded[0] || raw;
+    if (!fst)  return surCap;
+    return `${fst} ${surCap}`;
   }
 
-  // Parse bracket order using first-occurrence-per-seed AND club filter,
-  // then deduplicate so each seed appears only once.
+  // Parse bracket order: keep only leftmost-column entries (have club OR are BYE),
+  // deduplicated by seed so each seed appears once at its true bracket position.
   function parseBracketOrder(text) {
-    const parts = text.split(/(?=\(\d+\))/);
+    const parts     = text.split(/(?=\(\d+\))/);
     const seenSeeds = new Set();
     const ordered   = [];
     for (const part of parts) {
       const p = part.trim();
       if (!p || !/^\(\d+\)/.test(p)) continue;
-      const seed   = parseInt(p.match(/^\((\d+)\)/)[1]);
-      const isBye  = /BYE/i.test(p);
+      const seed    = parseInt(p.match(/^\((\d+)\)/)[1]);
+      const isBye   = /BYE/i.test(p);
       const hasClub = /\/\s*[A-Z]{2,3}(\s|$)/.test(p);
-      // Only keep leftmost-column entries (have club or are BYE), first occurrence per seed
       if ((isBye || hasClub) && !seenSeeds.has(seed)) {
         seenSeeds.add(seed);
         ordered.push({ seed, raw: p });
       }
     }
     return ordered;
+  }
+
+  // Find score for a specific bout in the next table text.
+  // Searches for winner's name then finds the nearest "X - Y" score.
+  function findScore(nextText, winnerSurname, loserRaw) {
+    const txt = nextText.toUpperCase();
+    // Find winner's position in text
+    const winIdx = txt.indexOf(winnerSurname);
+    if (winIdx === -1) return { scoreWinner: null, scoreLoser: null };
+    // Look for score within 300 chars after winner name
+    const after = nextText.slice(winIdx, winIdx + 300);
+    const sm = after.match(/(\d+)\s*[-–]\s*(\d+)/);
+    if (!sm) return { scoreWinner: null, scoreLoser: null };
+    return { scoreWinner: parseInt(sm[1]), scoreLoser: parseInt(sm[2]) };
   }
 
   for (const tree of trees) {
@@ -484,11 +521,10 @@ async function scrapeFTLTableau(eventGUID, tableauGUID, surname) {
       const ourIdx    = curOrder.findIndex(e => e.raw.toUpperCase().includes(surnameUpper));
       if (ourIdx === -1) continue;
 
-      const pos1      = ourIdx + 1;
-      const oppIdx    = pos1 % 2 === 1 ? ourIdx + 1 : ourIdx - 1;
-      const opp       = curOrder[oppIdx];
+      const pos1   = ourIdx + 1;
+      const oppIdx = pos1 % 2 === 1 ? ourIdx + 1 : ourIdx - 1;
+      const opp    = curOrder[oppIdx];
 
-      // DEBUG — remove once working correctly
       console.log(`DE t=${t} round=${roundName} ourIdx=${ourIdx} pos1=${pos1} oppIdx=${oppIdx} opp="${opp?.raw?.slice(0,40)}" byeSkip=${opp?.raw?.includes('BYE')} weWon=${next.text.toUpperCase().includes(surnameUpper)}`);
 
       if (!opp || opp.raw.includes('BYE')) continue;
@@ -496,16 +532,11 @@ async function scrapeFTLTableau(eventGUID, tableauGUID, surname) {
       const oppName = ftlFormatName(opp.raw);
       const weWon   = next.text.toUpperCase().includes(surnameUpper);
 
-      let scoreWinner = null, scoreLoser = null;
-      const winnerName = weWon ? surnameUpper : opp.raw.match(/^\(\d+\)\s*([A-Z]{2,})/)?.[1] || '';
-      if (winnerName) {
-        const idx = next.text.toUpperCase().indexOf(winnerName);
-        if (idx !== -1) {
-          const after = next.text.slice(idx, idx + 200);
-          const sm = after.match(/(\d+)\s*[-–]\s*(\d+)/);
-          if (sm) { scoreWinner = parseInt(sm[1]); scoreLoser = parseInt(sm[2]); }
-        }
-      }
+      // Get opponent's first all-caps word (surname) for score search
+      const oppSurname = opp.raw.match(/^\(\d+\)\s*([A-Z]{2,})/)?.[1] || '';
+      const { scoreWinner, scoreLoser } = weWon
+        ? findScore(next.text, surnameUpper, opp.raw)
+        : findScore(next.text, oppSurname, '');
 
       const sf = weWon ? scoreWinner : scoreLoser;
       const sa = weWon ? scoreLoser  : scoreWinner;
