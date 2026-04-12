@@ -595,6 +595,7 @@ async function scrapeFTLTableau(eventGUID, tableauGUID, surname) {
       const $    = cheerio.load(html);
       $('script,style').remove();
       const text = $.root().text().replace(/\s+/g, ' ').trim();
+      console.log(`Table ${t} text length: ${text.length}, hasUs: ${text.toUpperCase().includes(surnameUpper)}`);
       tables.push({ t, text, hasUs: text.toUpperCase().includes(surnameUpper) });
     }
 
