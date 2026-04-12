@@ -605,6 +605,7 @@ async function scrapeFTLTableau(eventGUID, tableauGUID, surname) {
       // Build ordered bracket list from current table
       const curOrder = parseBracketOrder(cur.text);
       const ourIdx   = curOrder.findIndex(e => e.raw.toUpperCase().includes(surnameUpper));
+      console.log(`DE t=${t} round=${roundName} ourIdx=${ourIdx} pos1=${ourIdx+1} oppIdx=${ourIdx+1%2===1?ourIdx+1:ourIdx-1} opp="${curOrder[ourIdx%2===0?ourIdx-1:ourIdx+1]?.raw?.slice(0,40)}" byeSkip=${curOrder[ourIdx%2===0?ourIdx-1:ourIdx+1]?.raw?.includes('BYE')} weWon=${next.text.toUpperCase().includes(surnameUpper)}`);
       if (ourIdx === -1) continue;
 
       // Odd (1-indexed) → opponent below; even → opponent above
