@@ -5,27 +5,28 @@ import TopBar from '../Shared/TopBar';
 import AddTournamentTab from '../Shared/AddTournamentTab';
 import EditTournamentTab from '../Shared/EditTournamentTab';
 import AddFencerTab from '../Shared/AddFencerTab';
-import SectionTabs from '../Shared/SectionTabs';
 
 const TABS = [
-  { id:'squad',    label:'Squad overview' },
-  { id:'compare',  label:'Comparison' },
-  { id:'focus',    label:'Focus areas' },
-  { id:'upcoming',   label:'Upcoming events' },
-  { id:'tournament',  label:'+ Add tournament' },
-  { id:'edit',        label:'✏️ Edit results' },
-  { id:'addfencer', label:'➕ Add fencer' },
+  { id: 'squad',      label: 'Squad' },
+  { id: 'fencer',     label: 'Fencer' },
+  { id: 'compare',    label: 'Comparison' },
+  { id: 'tournament', label: '+ Add tournament' },
+  { id: 'edit',       label: '✏️ Edit results' },
+  { id: 'addfencer',  label: '➕ Add fencer' },
 ];
 
 export default function CoachDashboard() {
   const { theme: T } = useTheme();
-  const [activeTab,  setActiveTab]  = useState('squad');
-  const [viewMode,   setViewMode]   = useState('coach'); // 'coach' or 'fencer'
-  const [squad,      setSquad]      = useState([]);
-  const [selected,   setSelected]   = useState(null);   // drilled-down fencer
-  const [detail,     setDetail]     = useState(null);
-  const [loading,    setLoading]    = useState(true);
-  const [note,       setNote]       = useState('');
+
+  const [activeTab,    setActiveTab]    = useState('squad');
+  const [squad,        setSquad]        = useState([]);
+  const [selected,     setSelected]     = useState(null);
+  const [detail,       setDetail]       = useState(null);
+  const [loading,      setLoading]      = useState(true);
+  const [syncingId,    setSyncingId]    = useState(null);
+  const [syncAllBusy,  setSyncAllBusy]  = useState(false);
+  const [note,         setNote]         = useState('');
+  const [fencerTab,    setFencerTab]    = useState(null); // fencer picker in Fencer tab
 
   useEffect(() => { loadSquad(); }, []);
 
@@ -39,8 +40,28 @@ export default function CoachDashboard() {
 
   async function openFencer(f) {
     setSelected(f);
+    setDetail(null);
     const d = await getFencerDetail(f.id);
     setDetail(d);
+  }
+
+  async function handleSync(fencerId, e) {
+    e?.stopPropagation();
+    setSyncingId(fencerId);
+    try {
+      await triggerScrape(fencerId);
+      setTimeout(loadSquad, 90000);
+    } catch {}
+    finally { setTimeout(() => setSyncingId(null), 3000); }
+  }
+
+  async function handleSyncAll() {
+    setSyncAllBusy(true);
+    for (const f of squad.filter(f => f.ukr_id)) {
+      await triggerScrape(f.id).catch(() => {});
+    }
+    setSyncAllBusy(false);
+    setTimeout(loadSquad, 90000);
   }
 
   async function handleAddNote() {
@@ -51,211 +72,283 @@ export default function CoachDashboard() {
     setDetail(d);
   }
 
-  async function handleSync(fencerId) {
-    await triggerScrape(fencerId).catch(() => {});
-    alert('Sync started — data will update in 1-2 minutes.');
+  function getStatus(f) {
+    if (!f.ukr_id) return 'no-ukr';
+    if (!f.stats?.events) return 'not-synced';
+    return 'synced';
   }
 
-  const pctColor = p => p >= 65 ? T.success : p >= 55 ? T.primary : T.warning;
-  const flag = (sev) => sev==='r'?{bg:'#450a0a',col:'#fca5a5'}:sev==='a'?{bg:'#451a03',col:'#fcd34d'}:sev==='g'?{bg:'#052e16',col:'#86efac'}:{bg:'#1e3a5f',col:'#93c5fd'};
+  function statusBadge(f) {
+    const s = getStatus(f);
+    if (s === 'synced')     return { label: 'synced',     bg: '#f0fdf4', col: '#15803d', dot: '#16A34A' };
+    if (s === 'not-synced') return { label: 'not synced', bg: '#f9fafb', col: '#6b7280', dot: '#9CA3AF' };
+    return                         { label: 'no UKR ID',  bg: '#fffbeb', col: '#b45309', dot: '#D97706' };
+  }
 
   function getFocusFlags(f) {
     const s = f.stats || {};
     const flags = [];
-    const gap = (s.pouleWinPct||0) - (s.deWinPct||0);
-    if (s.winPct < 45)   flags.push({ sev:'r', text:'Win rate below 45%',  detail:'Below average for this age group. Review training approach.' });
-    if (gap > 15)        flags.push({ sev:'r', text:`DE gap ${gap}pp`,      detail:`${s.deWinPct}% in DE vs ${s.pouleWinPct}% in pools. DE simulation work needed.` });
-    if (s.trend < -5)    flags.push({ sev:'r', text:`Win rate down ${Math.abs(s.trend||0)}pp YoY`, detail:'Performance declining year on year. Review tactical development.' });
-    if (gap > 8)         flags.push({ sev:'a', text:`Poule–DE gap ${gap}pp`, detail:'Noticeable drop from pools to DE. Pressure drill work recommended.' });
-    if ((s.medals||0)===0 && (s.events||0)>5) flags.push({ sev:'a', text:'No medals this season', detail:'Good events count but no podium finishes yet.' });
-    if (flags.length === 0) flags.push({ sev:'g', text:'On track', detail:'No significant data issues to flag.' });
-    if ((s.trend||0) > 10) flags.push({ sev:'g', text:`+${s.trend}pp improvement YoY`, detail:'Strong year-on-year improvement.' });
+    const gap = (s.pouleWinPct || 0) - (s.deWinPct || 0);
+    if (s.winPct < 45)            flags.push({ sev: 'r', text: 'Win rate below 45%',             detail: 'Below average. Review training approach.' });
+    if (gap > 15)                 flags.push({ sev: 'r', text: `DE gap ${gap}pp`,                detail: `${s.deWinPct}% DE vs ${s.pouleWinPct}% pools.` });
+    if ((s.trend || 0) < -5)      flags.push({ sev: 'r', text: `Down ${Math.abs(s.trend)}pp YoY`, detail: 'Performance declining year on year.' });
+    if (gap > 8 && gap <= 15)     flags.push({ sev: 'a', text: `Poule–DE gap ${gap}pp`,          detail: 'Pressure drill work recommended.' });
+    if (!s.medals && s.events > 5) flags.push({ sev: 'a', text: 'No medals this season',         detail: 'No podium finishes yet.' });
+    if ((s.trend || 0) > 10)      flags.push({ sev: 'g', text: `+${s.trend}pp improvement YoY`,  detail: 'Strong year-on-year improvement.' });
+    if (flags.length === 0)       flags.push({ sev: 'g', text: 'On track',                        detail: 'No issues to flag.' });
     return flags;
   }
 
-  if (loading) return <div style={{ minHeight:'100vh', background:T.black, display:'flex', alignItems:'center', justifyContent:'center', color:T.textTertiary }}>Loading squad…</div>;
+  function flagStyle(sev) {
+    if (sev === 'r') return { bg: '#fef2f2', col: '#b91c1c', dot: '#ef4444' };
+    if (sev === 'a') return { bg: '#fffbeb', col: '#b45309', dot: '#f59e0b' };
+    return                  { bg: '#f0fdf4', col: '#15803d', dot: '#22c55e' };
+  }
+
+  const winCol = p => p >= 65 ? '#16A34A' : p >= 50 ? '#F97316' : '#ef4444';
+
+  // ── Light theme palette (independent of T) ────────────────────────────────
+  const L = {
+    bg:       '#F9FAFB',
+    surface:  '#FFFFFF',
+    border:   '#E5E7EB',
+    border2:  '#D1D5DB',
+    text:     '#111827',
+    textSub:  '#6B7280',
+    textHint: '#9CA3AF',
+    orange:   '#F97316',
+    orangeL:  '#FFF7ED',
+    green:    '#16A34A',
+    tab:      '#374151',
+  };
+
+  if (loading) return (
+    <div style={{ minHeight: '100vh', background: L.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12 }}>
+      <div style={{ width: 36, height: 36, borderRadius: 10, background: L.orange, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 500, fontSize: 14 }}>AF</div>
+      <div style={{ fontSize: 13, color: L.textSub }}>Loading squad…</div>
+    </div>
+  );
+
+  const squadStats = {
+    active:  squad.length,
+    avgWin:  squad.length ? Math.round(squad.filter(f => f.stats?.events).reduce((s, f) => s + (f.stats?.winPct || 0), 0) / (squad.filter(f => f.stats?.events).length || 1)) : 0,
+    medals:  squad.reduce((s, f) => s + (f.stats?.medals || 0), 0),
+    synced:  squad.filter(f => f.stats?.events).length,
+  };
 
   return (
-    <div style={{ display:'flex', flexDirection:'column', minHeight:'100vh', background:T.black }}>
-      <TopBar activeView={viewMode} onViewChange={setViewMode} />
-      <SectionTabs tabs={TABS} active={activeTab} onChange={t => { setActiveTab(t); setSelected(null); }} />
+    <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', background: L.bg, fontFamily: 'var(--font-sans)' }}>
+      <TopBar />
 
-      <div style={{ flex:1, overflowY:'auto', padding:14, display:'flex', flexDirection:'column', gap:10 }}>
+      {/* ── Tab bar ── */}
+      <div style={{ background: L.surface, borderBottom: `1px solid ${L.border}`, padding: '0 20px', display: 'flex', gap: 0, overflowX: 'auto' }}>
+        {TABS.map(t => (
+          <button key={t.id} onClick={() => { setActiveTab(t.id); setSelected(null); }}
+            style={{ padding: '12px 16px', fontSize: 13, cursor: 'pointer', border: 'none', background: 'none',
+              borderBottom: activeTab === t.id ? `2px solid ${L.orange}` : '2px solid transparent',
+              color: activeTab === t.id ? L.orange : L.textSub,
+              fontWeight: activeTab === t.id ? 500 : 400, whiteSpace: 'nowrap' }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
 
-        {/* ── FENCER VIEW MODE — select a fencer from squad ── */}
-        {viewMode === 'fencer' && (
-          <div>
-            <div style={{ fontSize:12, color:T.textTertiary, marginBottom:10 }}>Select a fencer to view their performance hub:</div>
-            <div style={{ display:'flex', flexWrap:'wrap', gap:8 }}>
-              {squad.map(f => (
-                <button key={f.id} onClick={() => openFencer(f)} style={{
-                  padding:'8px 14px', background: selected?.id===f.id ? T.primary : T.surface1,
-                  border:`1px solid ${selected?.id===f.id ? T.primary : T.surface2}`,
-                  borderRadius:8, color: selected?.id===f.id ? 'white' : T.textPrimary,
-                  fontSize:13, cursor:'pointer', fontWeight:500,
-                }}>
-                  {f.name}
-                </button>
-              ))}
-            </div>
-            {selected && detail && (
-              <div style={{ marginTop:16, background:T.surface1, borderRadius:12, padding:16 }}>
-                <div style={{ fontSize:16, fontWeight:600, color:T.textPrimary, marginBottom:12 }}>{selected.name}</div>
-                <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:8 }}>
-                  {[
-                    ['Win Rate', (detail.stats?.winPct||0)+'%'],
-                    ['Poule Win%', (detail.stats?.pouleWinPct||0)+'%'],
-                    ['DE Win%', (detail.stats?.deWinPct||0)+'%'],
-                    ['Events', detail.stats?.events||0],
-                    ['Medals', detail.stats?.medals||0],
-                    ['Pool Bouts', detail.stats?.poolBouts||0],
-                    ['DE Bouts', detail.stats?.deBouts||0],
-                    ['Net Score', (detail.stats?.netScore||0)>0?'+'+detail.stats?.netScore:detail.stats?.netScore||0],
-                  ].map(([lbl,val]) => (
-                    <div key={lbl} style={{ background:T.surface2, borderRadius:8, padding:'10px 12px', textAlign:'center' }}>
-                      <div style={{ fontSize:18, fontWeight:700, color:T.textPrimary }}>{val}</div>
-                      <div style={{ fontSize:10, color:T.textTertiary, marginTop:2 }}>{lbl}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '20px 20px 40px' }}>
 
-        {/* ── SQUAD OVERVIEW ── */}
+        {/* ══════════════════ SQUAD TAB ══════════════════ */}
         {activeTab === 'squad' && !selected && (
           <>
-            {/* Headline metrics */}
-            <div style={{ display:'grid', gridTemplateColumns:'repeat(4,minmax(0,1fr))', gap:8 }}>
+            {/* Stat cards */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
               {[
-                { val:squad.length,                                                  lbl:'Active fencers', sub:'2025–26' },
-                { val:squad.length?Math.round(squad.reduce((s,f)=>s+(f.stats?.winPct||0),0)/squad.length)+'%':'-', lbl:'Squad avg win rate', sub:'all weapons', col:T.success },
-                { val:squad.reduce((s,f)=>s+(f.stats?.medals||0),0),                lbl:'Total medals',   sub:'this season' },
-                { val:squad.filter(f=>getFocusFlags(f).some(fl=>fl.sev==='r')).length, lbl:'Need attention', sub:'data flags', col:T.danger },
-              ].map(m => (
-                <div key={m.lbl} style={{ background:T.surface2, borderRadius:6, padding:'10px 12px' }}>
-                  <div style={{ fontSize:22, fontWeight:500, color:m.col||T.primary }}>{m.val}</div>
-                  <div style={{ fontSize:10, color:T.textTertiary, marginTop:2 }}>{m.lbl}</div>
-                  <div style={{ fontSize:9, color:T.textTertiary }}>{m.sub}</div>
+                { val: squadStats.active,         label: 'Active fencers',    sub: '2025–26 season' },
+                { val: `${squadStats.avgWin}%`,    label: 'Squad win rate',    sub: 'poule avg, this season', orange: true },
+                { val: squadStats.medals,          label: 'Medals this season', sub: 'top 3 finishes' },
+                { val: `${squadStats.synced}/${squadStats.active}`, label: 'Synced from UKRatings', sub: 'have results data' },
+              ].map(s => (
+                <div key={s.label} style={{ background: '#F3F4F6', borderRadius: 10, padding: '14px 16px' }}>
+                  <div style={{ fontSize: 11, color: L.textSub, textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 6 }}>{s.label}</div>
+                  <div style={{ fontSize: 24, fontWeight: 500, color: s.orange ? L.orange : L.text }}>{s.val}</div>
+                  <div style={{ fontSize: 11, color: L.textHint, marginTop: 3 }}>{s.sub}</div>
                 </div>
               ))}
             </div>
 
-            <div style={{ fontSize:11, color:T.textTertiary }}>Tap a fencer to see their full profile</div>
+            {/* Section header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <div style={{ fontSize: 12, fontWeight: 500, color: L.textSub, textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                Squad — {squad.length} fencers
+              </div>
+              <button onClick={handleSyncAll} disabled={syncAllBusy}
+                style={{ fontSize: 12, color: L.orange, border: `1px solid ${L.orange}`, background: 'none', padding: '5px 14px', borderRadius: 8, cursor: 'pointer', opacity: syncAllBusy ? 0.6 : 1 }}>
+                {syncAllBusy ? 'Syncing…' : '↻ Sync all from UKRatings'}
+              </button>
+            </div>
 
-            {/* Fencer cards */}
-            {squad.map(f => {
-              const s = f.stats || {};
-              const flags = getFocusFlags(f);
-              const col = f.colour || T.primary;
-              return (
-                <div key={f.id}
-                  onClick={() => openFencer(f)}
-                  style={{ background:T.surface1, border:`0.5px solid ${T.surface2}`, borderRadius:T.borderRadius, cursor:'pointer', overflow:'hidden', transition:'border-color .15s' }}
-                  onMouseEnter={e => e.currentTarget.style.borderColor = T.surface3}
-                  onMouseLeave={e => e.currentTarget.style.borderColor = T.surface2}
-                >
-                  {/* Header */}
-                  <div style={{ padding:'12px 14px', display:'flex', alignItems:'center', gap:10, borderBottom:`0.5px solid ${T.surface2}` }}>
-                    <div style={{ width:38, height:38, borderRadius:'50%', background:col+'22', color:col, display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, fontWeight:500, flexShrink:0 }}>
-                      {f.name?.split(' ').map(p=>p[0]).join('').slice(0,2)}
-                    </div>
-                    <div style={{ flex:1 }}>
-                      <div style={{ fontSize:14, fontWeight:500, color:T.textPrimary }}>{f.name}</div>
-                      <div style={{ fontSize:11, color:T.textTertiary, marginTop:1 }}>{f.category} · {s.events} events · {s.bouts} bouts</div>
-                    </div>
-                    <div style={{ textAlign:'right' }}>
-                      <div style={{ fontSize:20, fontWeight:500, color:pctColor(s.winPct||0) }}>{s.winPct||0}%</div>
-                      <div style={{ fontSize:9, color:(s.trend||0)>=0?T.success:T.danger }}>{(s.trend||0)>=0?'↑ +':'↓ '}{Math.abs(s.trend||0)}pp</div>
-                    </div>
-                  </div>
+            {/* Fencer cards grid */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              {squad.map(f => {
+                const s = f.stats || {};
+                const status = statusBadge(f);
+                const hasData = !!s.events;
+                const syncing = syncingId === f.id;
+                const col = f.colour || L.orange;
 
-                  {/* Bars */}
-                  <div style={{ padding:'10px 14px', display:'flex', flexDirection:'column', gap:6 }}>
-                    {[['Poule', s.pouleWinPct||0, col],['DE', s.deWinPct||0, col+'88']].map(([lbl,pct,c]) => (
-                      <div key={lbl} style={{ display:'flex', alignItems:'center', gap:8 }}>
-                        <span style={{ fontSize:10, color:T.textTertiary, width:38 }}>{lbl}</span>
-                        <div style={{ flex:1, height:5, background:T.surface2, borderRadius:3 }}>
-                          <div style={{ height:5, background:c, borderRadius:3, width:`${pct}%` }}/>
-                        </div>
-                        <span style={{ fontSize:10, fontWeight:500, color:c, width:28, textAlign:'right' }}>{pct}%</span>
+                return (
+                  <div key={f.id} onClick={() => { setSelected(f); openFencer(f); }}
+                    style={{ background: L.surface, border: `1px solid ${L.border}`, borderRadius: 12, cursor: 'pointer', overflow: 'hidden' }}
+                    onMouseEnter={e => e.currentTarget.style.borderColor = L.border2}
+                    onMouseLeave={e => e.currentTarget.style.borderColor = L.border}>
+
+                    {/* Card header */}
+                    <div style={{ padding: '14px 16px', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                      <div style={{ width: 40, height: 40, borderRadius: '50%', background: col + '22', color: col, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 500, flexShrink: 0 }}>
+                        {f.name?.split(' ').map(p => p[0]).join('').slice(0, 2)}
                       </div>
-                    ))}
-                  </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 3 }}>
+                          <span style={{ fontSize: 14, fontWeight: 500, color: L.text }}>{f.name}</span>
+                          <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 10, background: status.bg, color: status.col, fontWeight: 500, display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <span style={{ width: 6, height: 6, borderRadius: '50%', background: status.dot, display: 'inline-block' }}/>
+                            {status.label}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 12, color: L.textHint }}>
+                          {f.category} · {hasData ? `${s.events} events · ${s.bouts} bouts` : (f.ukr_id ? `UKR: ${f.ukr_id}` : 'No UKR ID set')}
+                        </div>
+                      </div>
+                      {hasData && (
+                        <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                          <div style={{ fontSize: 20, fontWeight: 500, color: winCol(s.winPct || 0) }}>{s.winPct || 0}%</div>
+                          <div style={{ fontSize: 10, color: (s.trend || 0) >= 0 ? L.green : '#ef4444' }}>
+                            {(s.trend || 0) >= 0 ? '↑ +' : '↓ '}{Math.abs(s.trend || 0)}pp
+                          </div>
+                        </div>
+                      )}
+                    </div>
 
-                  {/* Flags */}
-                  <div style={{ padding:'8px 14px 10px', borderTop:`0.5px solid ${T.surface2}`, display:'flex', gap:4, flexWrap:'wrap' }}>
-                    {flags.map((fl,i) => {
-                      const { bg, col } = flag(fl.sev);
-                      return <span key={i} style={{ fontSize:10, padding:'2px 8px', borderRadius:10, fontWeight:500, background:bg, color:col }}>{fl.text}</span>;
-                    })}
+                    {/* Data section */}
+                    {hasData ? (
+                      <div style={{ padding: '0 16px 12px' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 12 }}>
+                          {[
+                            { val: `${s.pouleWinPct || 0}%`, label: 'Poule', col: L.orange },
+                            { val: `${s.deWinPct || 0}%`,    label: 'DE',    col: L.textSub },
+                            { val: s.medals || 0,            label: 'Medals', col: L.green },
+                          ].map(m => (
+                            <div key={m.label} style={{ background: '#F9FAFB', borderRadius: 8, padding: '8px 6px', textAlign: 'center' }}>
+                              <div style={{ fontSize: 16, fontWeight: 500, color: m.col }}>{m.val}</div>
+                              <div style={{ fontSize: 10, color: L.textHint, marginTop: 2 }}>{m.label}</div>
+                            </div>
+                          ))}
+                        </div>
+                        {[['Poule', s.pouleWinPct || 0, L.orange], ['DE', s.deWinPct || 0, '#9CA3AF']].map(([lbl, pct, c]) => (
+                          <div key={lbl} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
+                            <span style={{ fontSize: 10, color: L.textHint, width: 30 }}>{lbl}</span>
+                            <div style={{ flex: 1, height: 5, background: '#F3F4F6', borderRadius: 3 }}>
+                              <div style={{ height: 5, background: c, borderRadius: 3, width: `${pct}%` }}/>
+                            </div>
+                            <span style={{ fontSize: 10, color: L.textSub, width: 28, textAlign: 'right' }}>{pct}%</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ margin: '0 16px 12px', background: '#F9FAFB', borderRadius: 8, padding: '12px', textAlign: 'center', fontSize: 12, color: L.textHint }}>
+                        {f.ukr_id ? 'Never synced — click Sync to load results' : 'Set UKRatings ID to enable auto-sync'}
+                      </div>
+                    )}
+
+                    {/* Footer */}
+                    <div style={{ padding: '10px 16px', borderTop: `1px solid ${L.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{ fontSize: 11, color: L.textHint }}>
+                        {hasData ? `Last: ${f.lastComp || 'recent'}` : 'No competitions loaded'}
+                      </div>
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <button onClick={e => { e.stopPropagation(); setSelected(f); openFencer(f); }}
+                          style={{ fontSize: 11, padding: '4px 10px', borderRadius: 6, cursor: 'pointer', border: `1px solid ${L.border}`, background: 'white', color: L.textSub }}>
+                          View
+                        </button>
+                        {f.ukr_id && (
+                          <button onClick={e => handleSync(f.id, e)} disabled={syncing}
+                            style={{ fontSize: 11, padding: '4px 10px', borderRadius: 6, cursor: 'pointer', border: 'none', background: L.orange, color: 'white', opacity: syncing ? 0.7 : 1 }}>
+                            {syncing ? '…' : '↻ Sync'}
+                          </button>
+                        )}
+                        {!f.ukr_id && (
+                          <button onClick={e => { e.stopPropagation(); setActiveTab('addfencer'); }}
+                            style={{ fontSize: 11, padding: '4px 10px', borderRadius: 6, cursor: 'pointer', border: 'none', background: L.orange, color: 'white' }}>
+                            + Edit
+                          </button>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </>
         )}
 
-        {/* ── DRILL DOWN ── */}
+        {/* ── Drilldown ── */}
         {activeTab === 'squad' && selected && (
           <>
-            <div onClick={() => { setSelected(null); setDetail(null); }}
-              style={{ display:'flex', alignItems:'center', gap:6, fontSize:12, color:T.textTertiary, cursor:'pointer', marginBottom:2 }}>
+            <button onClick={() => { setSelected(null); setDetail(null); }}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: L.textSub, cursor: 'pointer', background: 'none', border: 'none', marginBottom: 16, padding: 0 }}>
               ← Back to squad
-            </div>
+            </button>
 
             {!detail ? (
-              <div style={{ color:T.textTertiary, fontSize:13, padding:20 }}>Loading…</div>
+              <div style={{ textAlign: 'center', padding: 40, color: L.textHint, fontSize: 13 }}>Loading…</div>
             ) : (
-              <>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+
                 {/* Profile header */}
-                <div style={{ background:T.surface1, border:`0.5px solid ${T.surface2}`, borderRadius:T.borderRadius, padding:14, borderLeft:`3px solid ${selected.colour||T.primary}` }}>
-                  <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:14 }}>
-                    <div style={{ width:48, height:48, borderRadius:'50%', background:(selected.colour||T.primary)+'22', color:selected.colour||T.primary, display:'flex', alignItems:'center', justifyContent:'center', fontSize:18, fontWeight:500, flexShrink:0 }}>
-                      {selected.name?.split(' ').map(p=>p[0]).join('').slice(0,2)}
+                <div style={{ background: L.surface, border: `1px solid ${L.border}`, borderRadius: 12, padding: 16, borderLeft: `3px solid ${selected.colour || L.orange}` }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+                    <div style={{ width: 48, height: 48, borderRadius: '50%', background: (selected.colour || L.orange) + '22', color: selected.colour || L.orange, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 500 }}>
+                      {selected.name?.split(' ').map(p => p[0]).join('').slice(0, 2)}
                     </div>
-                    <div style={{ flex:1 }}>
-                      <div style={{ fontSize:16, fontWeight:500, color:T.textPrimary }}>{selected.name}</div>
-                      <div style={{ fontSize:11, color:T.textTertiary, marginTop:2 }}>{selected.category} · BF {selected.bf_licence} · UKR {selected.ukr_id}</div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 17, fontWeight: 500, color: L.text }}>{selected.name}</div>
+                      <div style={{ fontSize: 12, color: L.textHint, marginTop: 2 }}>{selected.category} · BF {selected.bf_licence} · UKR {selected.ukr_id}</div>
                     </div>
-                    <div style={{ textAlign:'right' }}>
-                      <div style={{ fontSize:24, fontWeight:500, color:pctColor(selected.stats?.winPct||0) }}>{selected.stats?.winPct||0}%</div>
-                      <div style={{ fontSize:10, color:T.textTertiary }}>win rate</div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: 26, fontWeight: 500, color: winCol(selected.stats?.winPct || 0) }}>{selected.stats?.winPct || 0}%</div>
+                      <div style={{ fontSize: 11, color: L.textHint }}>win rate</div>
                     </div>
                   </div>
 
-                  <div style={{ display:'grid', gridTemplateColumns:'repeat(4,minmax(0,1fr))', gap:8, marginBottom:12 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 14 }}>
                     {[
-                      { val:(selected.stats?.pouleWinPct||0)+'%', lbl:'Poule' },
-                      { val:(selected.stats?.deWinPct||0)+'%',    lbl:'DE',    col:(selected.stats?.deWinPct||0)>=55?T.success:(selected.stats?.deWinPct||0)>=42?T.primary:T.danger },
-                      { val:((selected.stats?.avgNet||0)>0?'+':'')+selected.stats?.avgNet, lbl:'Net touches', col:(selected.stats?.avgNet||0)>=0?T.success:T.danger },
-                      { val:selected.stats?.medals||0, lbl:'Medals' },
+                      { val: `${selected.stats?.pouleWinPct || 0}%`, label: 'Poule', col: L.orange },
+                      { val: `${selected.stats?.deWinPct || 0}%`,    label: 'DE' },
+                      { val: selected.stats?.medals || 0,            label: 'Medals', col: L.green },
+                      { val: selected.stats?.events || 0,            label: 'Events' },
                     ].map(m => (
-                      <div key={m.lbl} style={{ background:T.surface2, borderRadius:6, padding:'8px 10px' }}>
-                        <div style={{ fontSize:18, fontWeight:500, color:m.col||T.primary }}>{m.val}</div>
-                        <div style={{ fontSize:10, color:T.textTertiary, marginTop:2 }}>{m.lbl}</div>
+                      <div key={m.label} style={{ background: '#F3F4F6', borderRadius: 8, padding: '10px 12px', textAlign: 'center' }}>
+                        <div style={{ fontSize: 20, fontWeight: 500, color: m.col || L.text }}>{m.val}</div>
+                        <div style={{ fontSize: 11, color: L.textHint, marginTop: 2 }}>{m.label}</div>
                       </div>
                     ))}
                   </div>
 
-                  <button onClick={() => handleSync(selected.id)}
-                    style={{ fontSize:11, padding:'5px 10px', background:'transparent', border:`0.5px solid ${T.surface3}`, borderRadius:T.borderRadiusSm, color:T.primary, cursor:'pointer' }}>
-                    ↻ Sync UKRatings data
+                  <button onClick={() => handleSync(selected.id)} disabled={syncingId === selected.id}
+                    style={{ fontSize: 12, padding: '6px 14px', background: L.orange, border: 'none', borderRadius: 8, color: 'white', cursor: 'pointer', opacity: syncingId === selected.id ? 0.7 : 1 }}>
+                    {syncingId === selected.id ? '↻ Syncing…' : '↻ Sync UKRatings data'}
                   </button>
                 </div>
 
                 {/* Data signals */}
-                <div style={{ background:T.surface1, border:`0.5px solid ${T.surface2}`, borderRadius:T.borderRadius, padding:14 }}>
-                  <div style={{ fontSize:11, fontWeight:500, color:T.textTertiary, textTransform:'uppercase', letterSpacing:'.05em', marginBottom:10 }}>Data signals</div>
-                  {getFocusFlags(selected).map((fl,i) => {
-                    const { bg, col } = flag(fl.sev);
+                <div style={{ background: L.surface, border: `1px solid ${L.border}`, borderRadius: 12, padding: 16 }}>
+                  <div style={{ fontSize: 11, fontWeight: 500, color: L.textHint, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 12 }}>Data signals</div>
+                  {getFocusFlags(selected).map((fl, i) => {
+                    const fs = flagStyle(fl.sev);
                     return (
-                      <div key={i} style={{ background:bg, borderRadius:6, padding:'10px 12px', marginBottom:6, display:'flex', gap:10 }}>
-                        <div style={{ width:7, height:7, borderRadius:'50%', background:col, flexShrink:0, marginTop:4 }}/>
+                      <div key={i} style={{ background: fs.bg, borderRadius: 8, padding: '10px 12px', marginBottom: 8, display: 'flex', gap: 10 }}>
+                        <div style={{ width: 7, height: 7, borderRadius: '50%', background: fs.dot, flexShrink: 0, marginTop: 4 }}/>
                         <div>
-                          <div style={{ fontSize:12, fontWeight:500, color:col }}>{fl.text}</div>
-                          <div style={{ fontSize:11, color:col, opacity:.8, marginTop:2 }}>{fl.detail}</div>
+                          <div style={{ fontSize: 13, fontWeight: 500, color: fs.col }}>{fl.text}</div>
+                          <div style={{ fontSize: 12, color: fs.col, opacity: .8, marginTop: 2 }}>{fl.detail}</div>
                         </div>
                       </div>
                     );
@@ -263,81 +356,148 @@ export default function CoachDashboard() {
                 </div>
 
                 {/* Coach notes */}
-                <div style={{ background:T.surface1, border:`0.5px solid ${T.surface2}`, borderRadius:T.borderRadius, padding:14 }}>
-                  <div style={{ fontSize:11, fontWeight:500, color:T.primary, textTransform:'uppercase', letterSpacing:'.05em', marginBottom:10 }}>Coach notes</div>
-                  {(detail.notes||[]).map((n,i) => (
-                    <div key={i} style={{ padding:'8px 0', borderBottom:`0.5px solid ${T.surface2}`, fontSize:13, color:T.textSecondary, lineHeight:1.6 }}>
+                <div style={{ background: L.surface, border: `1px solid ${L.border}`, borderRadius: 12, padding: 16 }}>
+                  <div style={{ fontSize: 11, fontWeight: 500, color: L.textHint, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 12 }}>Coach notes</div>
+                  {(detail.notes || []).map((n, i) => (
+                    <div key={i} style={{ padding: '8px 0', borderBottom: `1px solid ${L.border}`, fontSize: 13, color: L.textSub, lineHeight: 1.6 }}>
                       <div>{n.note}</div>
-                      <div style={{ fontSize:10, color:T.textTertiary, marginTop:3 }}>{n.created_at?.slice(0,10)}</div>
+                      <div style={{ fontSize: 11, color: L.textHint, marginTop: 3 }}>{n.created_at?.slice(0, 10)}</div>
                     </div>
                   ))}
-                  <div style={{ display:'flex', gap:8, marginTop:10 }}>
-                    <input
-                      value={note}
-                      onChange={e => setNote(e.target.value)}
-                      placeholder="Add a coaching note…"
-                      style={{ flex:1, padding:'8px 10px', background:T.surface2, border:`0.5px solid ${T.surface3}`, borderRadius:T.borderRadiusSm, color:T.textPrimary, fontSize:13, outline:'none' }}
-                      onKeyDown={e => e.key==='Enter' && handleAddNote()}
-                    />
+                  <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                    <input value={note} onChange={e => setNote(e.target.value)} placeholder="Add a coaching note…"
+                      onKeyDown={e => e.key === 'Enter' && handleAddNote()}
+                      style={{ flex: 1, padding: '8px 12px', background: '#F9FAFB', border: `1px solid ${L.border}`, borderRadius: 8, color: L.text, fontSize: 13, outline: 'none', boxSizing: 'border-box' }}/>
                     <button onClick={handleAddNote}
-                      style={{ padding:'8px 14px', background:T.primary, border:'none', borderRadius:T.borderRadiusSm, color:'white', fontSize:12, cursor:'pointer' }}>
+                      style={{ padding: '8px 16px', background: L.orange, border: 'none', borderRadius: 8, color: 'white', fontSize: 13, cursor: 'pointer' }}>
                       Add
                     </button>
                   </div>
                 </div>
-              </>
+              </div>
             )}
           </>
         )}
 
-        {/* ── COMPARISON ── */}
+        {/* ══════════════════ FENCER TAB ══════════════════ */}
+        {activeTab === 'fencer' && (
+          <div>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 12, color: L.textHint, marginBottom: 8 }}>Select a fencer to view their full performance hub:</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {squad.map(f => (
+                  <button key={f.id} onClick={() => { setFencerTab(f); openFencer(f); }}
+                    style={{ padding: '8px 16px', fontSize: 13, fontWeight: 500, borderRadius: 20, cursor: 'pointer',
+                      background: fencerTab?.id === f.id ? L.orange : L.surface,
+                      color: fencerTab?.id === f.id ? 'white' : L.textSub,
+                      border: `1px solid ${fencerTab?.id === f.id ? L.orange : L.border}` }}>
+                    <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: f.colour || L.orange, marginRight: 6 }}/>
+                    {f.name?.split(' ')[0]}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {fencerTab && !detail && <div style={{ color: L.textHint, fontSize: 13, padding: 20, textAlign: 'center' }}>Loading…</div>}
+
+            {fencerTab && detail && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div style={{ background: L.surface, border: `1px solid ${L.border}`, borderRadius: 12, padding: 16, borderLeft: `3px solid ${fencerTab.colour || L.orange}` }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+                    <div style={{ width: 44, height: 44, borderRadius: '50%', background: (fencerTab.colour || L.orange) + '22', color: fencerTab.colour || L.orange, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 500 }}>
+                      {fencerTab.name?.split(' ').map(p => p[0]).join('').slice(0, 2)}
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 16, fontWeight: 500, color: L.text }}>{fencerTab.name}</div>
+                      <div style={{ fontSize: 12, color: L.textHint, marginTop: 2 }}>{fencerTab.category} · {fencerTab.stats?.events || 0} events · {fencerTab.stats?.bouts || 0} bouts</div>
+                    </div>
+                    <div style={{ fontSize: 24, fontWeight: 500, color: winCol(fencerTab.stats?.winPct || 0) }}>{fencerTab.stats?.winPct || 0}%</div>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
+                    {[
+                      { val: `${fencerTab.stats?.pouleWinPct || 0}%`, label: 'Poule', col: L.orange },
+                      { val: `${fencerTab.stats?.deWinPct || 0}%`,    label: 'DE' },
+                      { val: fencerTab.stats?.medals || 0,            label: 'Medals', col: L.green },
+                      { val: fencerTab.stats?.events || 0,            label: 'Events' },
+                    ].map(m => (
+                      <div key={m.label} style={{ background: '#F3F4F6', borderRadius: 8, padding: '10px', textAlign: 'center' }}>
+                        <div style={{ fontSize: 18, fontWeight: 500, color: m.col || L.text }}>{m.val}</div>
+                        <div style={{ fontSize: 11, color: L.textHint, marginTop: 2 }}>{m.label}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div style={{ background: L.surface, border: `1px solid ${L.border}`, borderRadius: 12, padding: 16 }}>
+                  <div style={{ fontSize: 11, fontWeight: 500, color: L.textHint, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 12 }}>Data signals</div>
+                  {getFocusFlags(fencerTab).map((fl, i) => {
+                    const fs = flagStyle(fl.sev);
+                    return (
+                      <div key={i} style={{ background: fs.bg, borderRadius: 8, padding: '10px 12px', marginBottom: 8, display: 'flex', gap: 10 }}>
+                        <div style={{ width: 7, height: 7, borderRadius: '50%', background: fs.dot, flexShrink: 0, marginTop: 4 }}/>
+                        <div>
+                          <div style={{ fontSize: 13, fontWeight: 500, color: fs.col }}>{fl.text}</div>
+                          <div style={{ fontSize: 12, color: fs.col, opacity: .8, marginTop: 2 }}>{fl.detail}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ══════════════════ COMPARISON TAB ══════════════════ */}
         {activeTab === 'compare' && (
-          <>
-            <div style={{ background:T.surface1, border:`0.5px solid ${T.surface2}`, borderRadius:T.borderRadius, padding:14 }}>
-              <div style={{ fontSize:11, fontWeight:500, color:T.textTertiary, textTransform:'uppercase', letterSpacing:'.05em', marginBottom:12 }}>Win rate — all fencers</div>
-              {[...squad].sort((a,b)=>(b.stats?.winPct||0)-(a.stats?.winPct||0)).map(f => (
-                <div key={f.id} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
-                  <div style={{ width:22, height:22, borderRadius:'50%', background:(f.colour||T.primary)+'22', color:f.colour||T.primary, display:'flex', alignItems:'center', justifyContent:'center', fontSize:9, fontWeight:500, flexShrink:0 }}>
-                    {f.name?.split(' ').map(p=>p[0]).join('').slice(0,2)}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ background: L.surface, border: `1px solid ${L.border}`, borderRadius: 12, padding: 16 }}>
+              <div style={{ fontSize: 11, fontWeight: 500, color: L.textHint, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 14 }}>Win rate — all fencers</div>
+              {[...squad].sort((a, b) => (b.stats?.winPct || 0) - (a.stats?.winPct || 0)).map(f => (
+                <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+                  <div style={{ width: 24, height: 24, borderRadius: '50%', background: (f.colour || L.orange) + '22', color: f.colour || L.orange, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 500, flexShrink: 0 }}>
+                    {f.name?.split(' ').map(p => p[0]).join('').slice(0, 2)}
                   </div>
-                  <div style={{ fontSize:12, color:T.textSecondary, width:100, flexShrink:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{f.name?.split(' ')[0]}</div>
-                  <div style={{ flex:1, height:6, background:T.surface2, borderRadius:3 }}>
-                    <div style={{ height:6, background:f.colour||T.primary, borderRadius:3, width:`${f.stats?.winPct||0}%` }}/>
+                  <div style={{ fontSize: 12, color: L.textSub, width: 90, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name?.split(' ')[0]}</div>
+                  <div style={{ flex: 1, height: 6, background: '#F3F4F6', borderRadius: 3 }}>
+                    <div style={{ height: 6, background: f.colour || L.orange, borderRadius: 3, width: `${f.stats?.winPct || 0}%` }}/>
                   </div>
-                  <div style={{ fontSize:12, fontWeight:500, color:pctColor(f.stats?.winPct||0), width:34, textAlign:'right' }}>{f.stats?.winPct||0}%</div>
-                  <div style={{ fontSize:11, color:(f.stats?.trend||0)>=0?T.success:T.danger, width:44, textAlign:'right' }}>
-                    {(f.stats?.trend||0)>=0?'↑ +':'↓ '}{Math.abs(f.stats?.trend||0)}pp
+                  <div style={{ fontSize: 12, fontWeight: 500, color: winCol(f.stats?.winPct || 0), width: 34, textAlign: 'right' }}>{f.stats?.winPct || 0}%</div>
+                  <div style={{ fontSize: 11, color: (f.stats?.trend || 0) >= 0 ? L.green : '#ef4444', width: 44, textAlign: 'right' }}>
+                    {(f.stats?.trend || 0) >= 0 ? '↑ +' : '↓ '}{Math.abs(f.stats?.trend || 0)}pp
                   </div>
                 </div>
               ))}
             </div>
 
-            <div style={{ background:T.surface1, border:`0.5px solid ${T.surface2}`, borderRadius:T.borderRadius, padding:14 }}>
-              <div style={{ fontSize:11, fontWeight:500, color:T.textTertiary, textTransform:'uppercase', letterSpacing:'.05em', marginBottom:12 }}>Full comparison</div>
-              <div style={{ overflowX:'auto' }}>
-                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
+            <div style={{ background: L.surface, border: `1px solid ${L.border}`, borderRadius: 12, padding: 16 }}>
+              <div style={{ fontSize: 11, fontWeight: 500, color: L.textHint, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 14 }}>Full comparison</div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                   <thead>
-                    <tr>
-                      {['Fencer','Events','Win %','Poule','DE','Net','Medals','Top 8'].map(h => (
-                        <th key={h} style={{ padding:'6px 10px', textAlign:'left', fontSize:10, fontWeight:500, color:T.textTertiary, textTransform:'uppercase', borderBottom:`0.5px solid ${T.surface2}` }}>{h}</th>
+                    <tr style={{ borderBottom: `1px solid ${L.border}` }}>
+                      {['Fencer', 'Events', 'Win %', 'Poule', 'DE', 'Medals'].map(h => (
+                        <th key={h} style={{ padding: '8px 10px', textAlign: 'left', fontSize: 11, fontWeight: 500, color: L.textHint, textTransform: 'uppercase' }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {[...squad].sort((a,b)=>(b.stats?.winPct||0)-(a.stats?.winPct||0)).map(f => {
+                    {[...squad].sort((a, b) => (b.stats?.winPct || 0) - (a.stats?.winPct || 0)).map(f => {
                       const s = f.stats || {};
                       return (
-                        <tr key={f.id} onMouseEnter={e=>e.currentTarget.style.background=T.surface2} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
-                          <td style={{ padding:'9px 10px', borderBottom:`0.5px solid ${T.surface2}` }}>
-                            <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-                              <div style={{ width:20, height:20, borderRadius:'50%', background:(f.colour||T.primary)+'22', color:f.colour||T.primary, display:'flex', alignItems:'center', justifyContent:'center', fontSize:9, fontWeight:500 }}>
-                                {f.name?.split(' ').map(p=>p[0]).join('').slice(0,2)}
+                        <tr key={f.id} style={{ borderBottom: `1px solid ${L.border}` }}
+                          onMouseEnter={e => e.currentTarget.style.background = '#F9FAFB'}
+                          onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                          <td style={{ padding: '10px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <div style={{ width: 22, height: 22, borderRadius: '50%', background: (f.colour || L.orange) + '22', color: f.colour || L.orange, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 500 }}>
+                                {f.name?.split(' ').map(p => p[0]).join('').slice(0, 2)}
                               </div>
-                              {f.name?.split(' ')[0]}
+                              <span style={{ color: L.text, fontWeight: 500 }}>{f.name?.split(' ')[0]}</span>
                             </div>
                           </td>
-                          {[s.events||0, `${s.winPct||0}%`, `${s.pouleWinPct||0}%`, `${s.deWinPct||0}%`, (s.avgNet||0)>0?`+${s.avgNet}`:s.avgNet||0, s.medals||0, s.top8||0].map((v,i) => (
-                            <td key={i} style={{ padding:'9px 10px', borderBottom:`0.5px solid ${T.surface2}`, color:T.textSecondary }}>{v}</td>
+                          {[s.events || 0, `${s.winPct || 0}%`, `${s.pouleWinPct || 0}%`, `${s.deWinPct || 0}%`, s.medals || 0].map((v, i) => (
+                            <td key={i} style={{ padding: '10px', color: L.textSub }}>{v}</td>
                           ))}
                         </tr>
                       );
@@ -346,67 +506,14 @@ export default function CoachDashboard() {
                 </table>
               </div>
             </div>
-          </>
-        )}
-
-        {/* ── FOCUS AREAS ── */}
-        {activeTab === 'focus' && (
-          <>
-            {['r','a','g'].map(sev => {
-              const label = sev==='r'?'Priority — action required':sev==='a'?'Monitor — watch closely':'On track — positive signals';
-              const border = sev==='r'?T.danger:sev==='a'?T.warning:T.success;
-              const items = squad.flatMap(f =>
-                getFocusFlags(f).filter(fl=>fl.sev===sev).map(fl=>({ fencer:f, ...fl }))
-              );
-              return (
-                <div key={sev} style={{ background:T.surface1, border:`0.5px solid ${T.surface2}`, borderRadius:T.borderRadius, padding:14, borderLeft:`2px solid ${border}` }}>
-                  <div style={{ fontSize:11, fontWeight:500, color:T.textTertiary, textTransform:'uppercase', letterSpacing:'.05em', marginBottom:10 }}>{label}</div>
-                  {items.length === 0 ? (
-                    <div style={{ fontSize:12, color:T.textTertiary }}>None at this level.</div>
-                  ) : items.map((item,i) => {
-                    const { bg, col } = flag(sev);
-                    return (
-                      <div key={i} style={{ background:bg, borderRadius:6, padding:'10px 12px', marginBottom:6, display:'flex', gap:10, alignItems:'flex-start' }}>
-                        <div style={{ width:7, height:7, borderRadius:'50%', background:col, flexShrink:0, marginTop:4 }}/>
-                        <div>
-                          <div style={{ fontSize:12, fontWeight:500, color:col, display:'flex', alignItems:'center', gap:6 }}>
-                            <div style={{ width:16, height:16, borderRadius:'50%', background:(item.fencer.colour||T.primary)+'22', color:item.fencer.colour||T.primary, display:'flex', alignItems:'center', justifyContent:'center', fontSize:8, fontWeight:500 }}>
-                              {item.fencer.name?.split(' ').map(p=>p[0]).join('').slice(0,2)}
-                            </div>
-                            {item.fencer.name?.split(' ')[0]} — {item.text}
-                          </div>
-                          <div style={{ fontSize:11, color:col, opacity:.8, marginTop:3 }}>{item.detail}</div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              );
-            })}
-          </>
-        )}
-
-        {/* ── ADD TOURNAMENT ── */}
-        {activeTab === 'tournament' && (
-          <AddTournamentTab />
-        )}
-
-        {activeTab === 'addfencer' && (
-          <AddFencerTab />
-        )}
-        
-        {/* ── UPCOMING ── */}
-        {activeTab === 'upcoming' && (
-          <div style={{ background:T.surface1, border:`0.5px solid ${T.surface2}`, borderRadius:T.borderRadius, padding:14 }}>
-            <div style={{ fontSize:11, fontWeight:500, color:T.textTertiary, textTransform:'uppercase', letterSpacing:'.05em', marginBottom:12 }}>Upcoming events</div>
-            <div style={{ fontSize:13, color:T.textTertiary, padding:'20px 0', textAlign:'center' }}>
-              Upcoming events are pulled from UKRatings upcoming competitions data.<br/>
-              <span style={{ fontSize:12, color:T.primary, cursor:'pointer', marginTop:8, display:'block' }} onClick={() => window.open('https://www.ukratings.co.uk', '_blank')}>
-                View on UKRatings →
-              </span>
-            </div>
           </div>
         )}
+
+        {/* ══════════════════ OTHER TABS ══════════════════ */}
+        {activeTab === 'tournament' && <AddTournamentTab />}
+        {activeTab === 'edit'       && <EditTournamentTab isCoach />}
+        {activeTab === 'addfencer' && <AddFencerTab />}
+
       </div>
     </div>
   );
