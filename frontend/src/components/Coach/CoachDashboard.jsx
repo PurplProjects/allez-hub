@@ -5,6 +5,7 @@ import TopBar from '../Shared/TopBar';
 import AddTournamentTab from '../Shared/AddTournamentTab';
 import EditTournamentTab from '../Shared/EditTournamentTab';
 import AddFencerTab from '../Shared/AddFencerTab';
+import BoutBreakdown from '../Shared/BoutBreakdown';
 
 const TABS = [
   { id: 'squad',      label: 'Squad' },
@@ -375,6 +376,8 @@ export default function CoachDashboard() {
                   </div>
                 </div>
               </div>
+
+              <BoutBreakdown bouts={detail.bouts || []} />
             )}
           </>
         )}
