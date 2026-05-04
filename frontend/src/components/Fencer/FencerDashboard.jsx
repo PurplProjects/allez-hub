@@ -99,7 +99,7 @@ export default function FencerDashboard() {
       {/* Tab content */}
       <div style={{ flex: 1, overflowY: 'auto' }}>
         {activeTab === 'overview' && (
-          <OverviewTab fencer={fencer} stats={stats} competitions={competitions} />
+          <OverviewTab fencer={fencer} stats={stats} competitions={competitions} bouts={bouts} />
         )}
         {activeTab === 'poolde' && (
           <PoolDETab stats={stats} />
@@ -128,7 +128,6 @@ export default function FencerDashboard() {
 }
 
 function LoadingScreen() {
-  const { theme: T } = useTheme();
   return (
     <div style={{
       minHeight: '100vh', background: T.black,
