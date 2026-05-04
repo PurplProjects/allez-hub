@@ -375,10 +375,9 @@ export default function CoachDashboard() {
                     </button>
                   </div>
                 </div>
-              </div>
-
               <BoutBreakdown bouts={detail.bouts || []} />
-            )}
+              </div>
+                )}
           </>
         )}
 
