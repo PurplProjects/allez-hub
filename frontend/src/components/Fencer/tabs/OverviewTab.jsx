@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useTheme } from '../../../hooks/useTheme';
 import { Line } from 'react-chartjs-2';
+import BoutBreakdown from '../../Shared/BoutBreakdown';
 import {
   Chart as ChartJS, CategoryScale, LinearScale,
   LineElement, PointElement, Tooltip, Filler,
@@ -62,7 +63,7 @@ function yearEmoji(year, byYear) {
   return '⬆️';
 }
 
-export default function OverviewTab({ fencer, stats, competitions }) {
+export default function OverviewTab({ fencer, stats, competitions, bouts = [] }) {
   const { theme: T } = useTheme();
   const [animIn, setAnimIn] = useState(false);
   useEffect(() => { const t = setTimeout(() => setAnimIn(true), 50); return () => clearTimeout(t); }, []);
@@ -404,6 +405,8 @@ export default function OverviewTab({ fencer, stats, competitions }) {
           })}
         </div>
       )}
+
+      <BoutBreakdown bouts={bouts} />
 
     </div>
   );
